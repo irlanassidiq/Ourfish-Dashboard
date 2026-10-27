@@ -1,0 +1,1090 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fish Forever catch dashboard — Indonesia</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐟</text></svg>">
+<style>
+:root {
+  color-scheme: light;
+  --font-anthropic-sans: "Source Sans 3", "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-anthropic-serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --color-bg: #f3f6f7; --color-panel: #ffffff; --color-fg: #14273a; --color-fg-muted: #5b6b78; --color-border-line: #d9e2e7;
+  --color-ok: #00833e; --color-warn: #e78828; --color-bad: #b50a37;
+  --cds-surface-popover: #ffffff; --cds-border: #cfd9df; --cds-shadow-popover: 0 6px 20px rgba(20, 39, 58, .14); --cds-text-secondary: #5b6b78;
+  --cds-chart-grid: #e6ecef; --cds-chart-axis: #9aa8b2; --cds-chart-reference: #7d8c97; --cds-chart-muted: #b7c3ca; --cds-chart-status-critical: #b50a37;
+  --cds-radius: 8px; --cds-pad-xs: 4px; --cds-pad-sm: 8px; --cds-pad-md: 12px; --cds-pad-lg: 18px; --cds-pad-xl: 28px;
+  --cds-gap-xs: 4px; --cds-gap-sm: 8px; --cds-gap-md: 14px; --cds-gap-lg: 22px; --cds-gap-xl: 32px;
+  --cds-font-size-caption: 13px; --cds-font-size-body: 15px; --cds-font-size-heading: 17px; --cds-font-size-title: 30px; --cds-font-weight-medium: 600;
+  --cds-dur-slow: 400ms; --cds-ease-out: cubic-bezier(.2, .7, .2, 1);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --color-bg: #0d1a24; --color-panel: #13242f; --color-fg: #e4edf1; --color-fg-muted: #9aabb6; --color-border-line: #23394a;
+    --color-ok: #3fbf7a; --color-warn: #f0a050; --color-bad: #f0607d;
+    --cds-surface-popover: #1a2f3d; --cds-border: #2e4a5d; --cds-shadow-popover: 0 6px 20px rgba(0, 0, 0, .45); --cds-text-secondary: #9aabb6;
+    --cds-chart-grid: #1f3442; --cds-chart-axis: #5a7282; --cds-chart-reference: #7c93a2; --cds-chart-muted: #4a6271; --cds-chart-status-critical: #f0607d;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--color-bg); color: var(--color-fg); font-family: var(--font-anthropic-sans); }
+#dash-root { max-width: 1240px; margin: 0 auto; padding: clamp(14px, 3vw, 36px); }
+:focus-visible { outline: 2px solid #1f6fb2; outline-offset: 2px; }
+[hidden] { display: none !important; }
+.dash-skeleton { color: transparent !important; }
+.ff-missing { background: var(--color-panel); border: 1px solid var(--color-bad); color: var(--color-bad); padding: 12px 16px; border-radius: 8px; }
+</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600&family=Source+Serif+4:opsz,wght@8..60,400&display=swap">
+<script src="lib/d3.min.js"></script>
+<script src="data/data.js"></script>
+<script>
+// Stands in for the Claude dashboard runtime: serves the tables in data/data.js,
+// keeps the filter state in the page and redraws on every change.
+(() => {
+  const src = window.FF_DATA || { files: {} };
+  const parseCSV = (text) => {
+    const rows = []; let row = [], f = '', q = false;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (q) { if (c === '"') { if (text[i + 1] === '"') { f += '"'; i++; } else q = false; } else f += c; }
+      else if (c === '"') q = true; else if (c === ',') { row.push(f); f = ''; }
+      else if (c === '\n') { row.push(f.replace(/\r$/, '')); rows.push(row); row = []; f = ''; }
+      else f += c;
+    }
+    if (f || row.length) { row.push(f); rows.push(row); }
+    const head = rows.shift() || [];
+    return { columns: head, data: rows.filter((r) => r.length === head.length).map((r) => Object.fromEntries(head.map((h, i) => [h, r[i]]))) };
+  };
+  const tables = {};
+  for (const [id, text] of Object.entries(src.files || {})) tables[id] = parseCSV(text);
+  const years = (tables.catch_cube?.data || []).map((r) => 2019 + Math.floor(Number(r.m) / 12));
+  const defaults = { provinces: [], districts: [], areas: [], families: [], units: [], y0: years.length ? Math.min(...years) : 2019, y1: years.length ? Math.max(...years) : 2019, metric: 'kg', ind: 'landings', step: 'day', sizeSp: null };
+  // Filters can come from the address (#y0=2024&ind=cpue …) so a view can be shared as a link
+  const fromHash = () => { try { const h = new URLSearchParams(location.hash.slice(1)); const o = {}; for (const [k, v] of h) { if (!(k in defaults)) continue; o[k] = Array.isArray(defaults[k]) ? (v ? v.split('~') : []) : (typeof defaults[k] === 'number' ? Number(v) : v || null); } return o; } catch (e) { return {}; } };
+  let params = { ...defaults, ...fromHash() };
+  const toHash = () => { const h = new URLSearchParams(); for (const [k, v] of Object.entries(params)) { const dv = defaults[k]; const same = Array.isArray(v) ? v.length === 0 : v === dv; if (!same && v !== null) h.set(k, Array.isArray(v) ? v.join('~') : String(v)); } const s = h.toString(); history.replaceState(null, '', s ? '#' + s : location.pathname + location.search); };
+  const subs = []; let queued = false;
+  const run = () => { queued = false; for (const fn of subs) { try { fn(); } catch (e) { console.error(e); } } };
+  const later = () => { if (!queued) { queued = true; Promise.resolve().then(run); } };
+  window.dash = {
+    data: (id) => tables[id] ? { status: 'ok', data: tables[id].data, columns: tables[id].columns, meta: [], refreshing: false } : { status: 'missing', data: [], columns: [], meta: [] },
+    onData: (fn) => { subs.push(fn); try { fn(); } catch (e) { console.error(e); } },
+    params: () => ({ ...params }),
+    setParams: (o) => { params = { ...params, ...o }; toHash(); later(); },
+    resetParams: () => { params = { ...defaults }; toHash(); later(); },
+    colors: ['#1f6fb2', '#0f9488', '#c2410c', '#7c3aed', '#b45309', '#be185d', '#4d7c0f', '#475569'],
+    refresh: () => later(), setLink: () => {}, calc: () => {}, loader: () => {},
+  };
+  let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(run, 150); });
+  // PNG export saves through the browser
+  window.claude = { use: async (name) => name === 'downloads' ? { save: async ({ filename, data }) => { const url = URL.createObjectURL(data instanceof Blob ? data : new Blob([data])); const a = document.createElement('a'); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 4000); return { status: 'saved' }; } } : null };
+  const fmtDate = (s) => { const d = new Date(s); return isNaN(d) ? s : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }); };
+  window.FF_UPDATED = src.generated ? fmtDate(src.generated) : '';
+  document.addEventListener('DOMContentLoaded', () => {
+    const last = tables.summary?.data?.[0]?.last_date;
+    const g = document.getElementById('ff-generated'), l = document.getElementById('ff-latest'), n = document.getElementById('trend-note');
+    if (g) g.textContent = window.FF_UPDATED || 'unknown';
+    if (l) l.textContent = last ? fmtDate(last + 'T00:00:00Z') : 'unknown';
+    if (n && last) n.textContent += ` Data runs to ${fmtDate(last + 'T00:00:00Z')}.`;
+    if (!window.FF_DATA) document.getElementById('dash-root').insertAdjacentHTML('afterbegin', '<p class="ff-missing">The data file data/data.js didn’t load. Run R/build_data.R to create it, then reload.</p>');
+  });
+})();
+</script>
+</head>
+<body>
+<div id="dash-root">
+<style>
+.ff { font-family: var(--font-anthropic-sans); color: var(--color-fg); display: flex; flex-direction: column; gap: var(--cds-gap-lg); }
+.ff-head h1 { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); margin: 0 0 var(--cds-gap-xs); }
+.ff-take { margin: 0; font-size: var(--cds-font-size-body); max-width: 60rem; }
+.ff-sub { margin: var(--cds-gap-xs) 0 0; color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); }
+.ff-controls { display: flex; flex-wrap: wrap; gap: var(--cds-gap-sm); align-items: end; }
+.ff-field { display: flex; flex-direction: column; gap: 2px; font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); position: relative; }
+.ff-controls select, .ff-btn, .ff-search, .ff-ms-btn { font: inherit; font-size: var(--cds-font-size-body); color: var(--color-fg); background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-xs) var(--cds-pad-sm); }
+.ff-btn, .ff-ms-btn { cursor: pointer; }
+.ff-ms-btn { min-width: 11rem; max-width: 16rem; text-align: left; display: flex; justify-content: space-between; gap: var(--cds-gap-sm); align-items: center; }
+.ff-ms-btn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ff-ms-btn::after { content: "▾"; color: var(--color-fg-muted); }
+.ff-ms-btn[aria-expanded="true"] { border-color: var(--color-fg); }
+.ff-ms-pop { position: absolute; top: calc(100% + 4px); left: 0; z-index: 20; width: min(22rem, 85vw); background: var(--cds-surface-popover); border: 1px solid var(--cds-border); border-radius: var(--cds-radius); box-shadow: var(--cds-shadow-popover); padding: var(--cds-pad-sm); display: flex; flex-direction: column; gap: var(--cds-gap-xs); color: var(--color-fg); }
+.ff-ms-pop[hidden] { display: none; }
+.ff-ms-pop .ff-search { width: 100%; box-sizing: border-box; }
+.ff-ms-actions { display: flex; gap: var(--cds-gap-xs); justify-content: space-between; align-items: center; font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+.ff-ms-actions button { all: unset; cursor: pointer; color: var(--color-fg); text-decoration: underline; font-size: var(--cds-font-size-caption); }
+.ff-ms-list { max-height: 16rem; overflow: auto; display: flex; flex-direction: column; }
+.ff-ms-list label { display: flex; gap: 8px; align-items: flex-start; padding: 3px 2px; font-size: var(--cds-font-size-caption); color: var(--color-fg); cursor: pointer; border-radius: 4px; }
+.ff-ms-list label:hover { background: var(--color-panel); }
+.ff-ms-list label small { display: block; color: var(--color-fg-muted); font-size: inherit; }
+.ff-ms-group { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); padding: 6px 2px 2px; font-weight: var(--cds-font-weight-medium); }
+.ff-btn[aria-pressed="true"] { background: var(--color-fg); color: var(--color-bg); border-color: var(--color-fg); }
+.ff-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: var(--cds-gap-md); }
+.ff-card { background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-lg); position: relative; min-width: 0; }
+.ff-kpi-label { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+.ff-kpi-value { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); font-variant-numeric: tabular-nums; margin: var(--cds-gap-xs) 0; min-height: 1.3em; }
+.ff-kpi-note { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+.ff-card h2 { font-size: var(--cds-font-size-heading); font-weight: var(--cds-font-weight-medium); margin: 0; }
+.ff-note { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); margin: 2px 0 var(--cds-gap-md); }
+.ff-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr)); gap: var(--cds-gap-md); }
+.ff-row-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--cds-gap-sm); align-items: start; }
+.ff-seg { display: flex; flex-wrap: wrap; gap: var(--cds-gap-xs); }
+.ff-seg .ff-btn { font-size: var(--cds-font-size-caption); }
+.ff-chart { min-height: 280px; }
+.ff-bars { display: flex; flex-direction: column; gap: 6px; min-height: 240px; }
+.ff-bar-row { display: grid; grid-template-columns: minmax(7rem, 38%) 1fr auto; gap: var(--cds-gap-sm); align-items: center; font-size: var(--cds-font-size-caption); cursor: default; }
+.ff-bar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ff-bar-label small { color: var(--color-fg-muted); font-size: inherit; }
+.ff-bar-track { height: 14px; }
+.ff-bar-fill { height: 100%; border-radius: 4px; min-width: 2px; }
+.ff-bar-val { font-variant-numeric: tabular-nums; color: var(--color-fg-muted); text-align: right; min-width: 3.5rem; }
+.ff-bar-row:hover .ff-bar-fill { filter: brightness(1.15); }
+.ff-empty { color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); padding: var(--cds-pad-md) 0; }
+.ff-tip { position: absolute; pointer-events: none; background: var(--cds-surface-popover); border: 1px solid var(--cds-border); border-radius: var(--cds-radius); box-shadow: var(--cds-shadow-popover); padding: var(--cds-pad-xs) var(--cds-pad-sm); font-size: var(--cds-font-size-caption); z-index: 5; white-space: nowrap; }
+.ff-tip-head { color: var(--cds-text-secondary); margin-bottom: 2px; }
+.ff-tip-line { display: flex; gap: 6px; align-items: center; font-variant-numeric: tabular-nums; }
+.ff-sw { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+.ff-legend { display: flex; flex-wrap: wrap; gap: var(--cds-gap-xs) var(--cds-gap-md); font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); margin-bottom: var(--cds-gap-sm); }
+.ff-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.ff-tablebox { max-height: 26rem; overflow: auto; border-top: 1px solid var(--color-border-line); }
+.ff-table { width: 100%; border-collapse: collapse; font-size: var(--cds-font-size-caption); font-variant-numeric: tabular-nums; }
+.ff-table th { position: sticky; top: 0; background: var(--color-panel); text-align: left; font-weight: var(--cds-font-weight-medium); padding: 0; border-bottom: 1px solid var(--color-border-line); z-index: 1; }
+.ff-table th button { all: unset; cursor: pointer; display: block; width: 100%; box-sizing: border-box; padding: var(--cds-pad-xs) var(--cds-pad-sm); }
+.ff-table th.num, .ff-table td.num { text-align: right; }
+.ff-table td { padding: var(--cds-pad-xs) var(--cds-pad-sm); border-bottom: 1px solid var(--color-border-line); vertical-align: middle; }
+.ff-table td .ff-local { color: var(--color-fg-muted); display: block; }
+.ff-incell { display: flex; align-items: center; gap: 6px; justify-content: flex-end; }
+.ff-incell i { display: inline-block; height: 8px; border-radius: 4px; background: var(--cds-chart-muted); }
+.ff-tsearch { width: min(100%, 16rem); font-size: var(--cds-font-size-caption); }
+.ff-foot { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); line-height: 1.5; }
+.ff-foot p { margin: 0 0 var(--cds-gap-xs); }
+.ff svg text { font-family: var(--font-anthropic-sans); }
+@media (max-width: 40rem) { .ff-hide-narrow { display: none; } }
+[data-dash-source-state=empty] { color: transparent; }
+[data-dash-source-state=refreshing] { opacity: .5; transition: opacity var(--cds-dur-slow); }
+.ff-fail { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: inherit; color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); }
+.ff-fail::before { content: ""; width: .375rem; height: .375rem; border-radius: 50%; background: var(--color-bad); }
+@media (prefers-reduced-motion: no-preference) {
+  .ff-anim .ff-bar-fill { animation: ffgrow var(--cds-dur-slow) var(--cds-ease-out); transform-origin: left; }
+  @keyframes ffgrow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+}
+.ff-ind-controls { display: flex; flex-wrap: wrap; gap: var(--cds-gap-md); align-items: end; margin-bottom: var(--cds-gap-md); }
+.ff-ind-controls .ff-field select { font: inherit; font-size: var(--cds-font-size-body); color: var(--color-fg); background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-xs) var(--cds-pad-sm); max-width: min(24rem, 80vw); }
+.ff-ind-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr)); gap: var(--cds-gap-sm); margin-bottom: var(--cds-gap-md); }
+.ff-ind-stat { border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-sm); }
+.ff-ind-stat b { display: block; font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-heading); font-variant-numeric: tabular-nums; }
+.ff-ind-stat span { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+.ff-ind-chart { min-height: 320px; }
+.ff-ind-method { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); margin: var(--cds-gap-sm) 0 0; line-height: 1.5; }
+</style>
+
+<div class="ff">
+  <header class="ff-head" id="overview">
+    <h1>Fish Forever catch dashboard — Indonesia</h1>
+    <p class="ff-take dash-skeleton" id="takeaway" data-source="catch_cube areas buying_units">—</p>
+    <p class="ff-sub dash-skeleton" id="snapshot" data-source="summary">—</p>
+  </header>
+
+  <div class="ff-controls" id="filters">
+    <div class="ff-field" id="ms-prov" data-source="areas">Provinces</div>
+    <div class="ff-field" id="ms-dist" data-source="areas">Districts</div>
+    <div class="ff-field" id="ms-area" data-source="areas">Managed access areas</div>
+    <div class="ff-field" id="ms-fam" data-source="buying_units">Families</div>
+    <div class="ff-field" id="ms-unit" data-source="buying_units">Buying units</div>
+    <label class="ff-field">From<select class="ff-y0" data-source="catch_cube" aria-label="From year"></select></label>
+    <label class="ff-field">To<select class="ff-y1" data-source="catch_cube" aria-label="To year"></select></label>
+    <button class="ff-btn ff-reset" type="button">Reset</button>
+  </div>
+
+  <section class="ff-kpis" id="kpis">
+    <div class="ff-card" id="kpi-catch" data-source="catch_cube"><div class="ff-kpi-label">Total catch</div><div class="ff-kpi-value dash-skeleton">—</div><div class="ff-kpi-note">—</div></div>
+    <div class="ff-card" id="kpi-value" data-source="catch_cube"><div class="ff-kpi-label">Catch value (IDR)</div><div class="ff-kpi-value dash-skeleton">—</div><div class="ff-kpi-note">—</div></div>
+    <div class="ff-card" id="kpi-price" data-source="catch_cube"><div class="ff-kpi-label">Average value per kg</div><div class="ff-kpi-value dash-skeleton">—</div><div class="ff-kpi-note">—</div></div>
+    <div class="ff-card" id="kpi-records" data-source="catch_cube"><div class="ff-kpi-label">Catch records</div><div class="ff-kpi-value dash-skeleton">—</div><div class="ff-kpi-note">—</div></div>
+  </section>
+
+
+  <section class="ff-card" id="indicators">
+    <h2>Indicator plots</h2>
+    <p class="ff-note">Pick an indicator to plot it for the filters above.</p>
+    <div class="ff-ind-controls">
+      <div class="ff-field">Indicator<div class="ff-seg" id="ind-toggle" role="group" aria-label="Indicator">
+        <button class="ff-btn" type="button" data-i="landings">Total landings</button>
+        <button class="ff-btn" type="button" data-i="cpue">CPUE</button>
+        <button class="ff-btn" type="button" data-i="size">Size structure</button>
+        <button class="ff-btn" type="button" data-i="comp">Species composition</button>
+      </div></div>
+      <div class="ff-field" id="ind-step-wrap">Points<div class="ff-seg" id="ind-step" role="group" aria-label="Points per">
+        <button class="ff-btn" type="button" data-s="day">Daily</button>
+        <button class="ff-btn" type="button" data-s="month">Monthly</button>
+        <button class="ff-btn" type="button" data-s="year">Yearly</button>
+      </div></div>
+      <div class="ff-field" id="ind-export-wrap" hidden>Export<button class="ff-btn" type="button" id="ind-export">Download PNG</button></div>
+      <label class="ff-field" id="ind-sp-wrap" hidden>Species (buying unit)<select id="ind-sp" data-source="species_params size_bins" aria-label="Species for size structure"></select></label>
+    </div>
+    <div class="ff-ind-stats" id="ind-stats" data-source="catch_cube daily_catch daily_trips size_bins species_params"></div>
+    <div class="ff-legend" id="ind-legend" data-source="catch_cube buying_units"></div>
+    <div class="ff-ind-chart dash-skeleton" id="ind-chart" data-source="catch_cube daily_catch daily_trips size_bins species_params buying_units areas"></div>
+    <p class="ff-ind-method" id="ind-method">—</p>
+  </section>
+
+  <section class="ff-card" id="trend-card">
+    <div class="ff-row-head">
+      <div><h2>Monthly landings</h2><p class="ff-note" id="trend-note">Each bar is one calendar month for the current selection.</p></div>
+      <div class="ff-seg" id="metric-toggle" role="group" aria-label="Measure">
+        <button class="ff-btn" type="button" data-m="kg">Catch</button>
+        <button class="ff-btn" type="button" data-m="idr">Value</button>
+        <button class="ff-btn" type="button" data-m="n">Records</button>
+      </div>
+    </div>
+    <div class="ff-chart dash-skeleton" id="trend" data-source="catch_cube"></div>
+  </section>
+
+  <div class="ff-grid">
+    <section class="ff-card" id="families-card">
+      <h2>Catch by fish family</h2>
+      <p class="ff-note">Share of catch weight. The 12 heaviest families in the selection; the rest are grouped.</p>
+      <div class="ff-bars dash-skeleton" id="families" data-source="catch_cube buying_units"></div>
+    </section>
+    <section class="ff-card" id="gears-card">
+      <h2>Catch by fishing gear</h2>
+      <p class="ff-note">Share of catch weight. Many records don’t name a gear.</p>
+      <div class="ff-bars dash-skeleton" id="gears" data-source="catch_cube gears"></div>
+    </section>
+  </div>
+
+  <section class="ff-card" id="price-card">
+    <h2>Average price per kg by family</h2>
+    <p class="ff-note">IDR per kg (total value ÷ total weight) each year, for the 6 heaviest families in the selection.</p>
+    <div class="ff-legend" id="price-legend" data-source="catch_cube buying_units"></div>
+    <div class="ff-chart dash-skeleton" id="price" data-source="catch_cube buying_units"></div>
+  </section>
+
+  <section class="ff-card" id="units-card">
+    <div class="ff-row-head">
+      <div><h2>Buying units</h2><p class="ff-note">Totals for the current selection. Click a header to sort.</p></div>
+      <input class="ff-search ff-tsearch" id="unit-search" type="search" placeholder="Search buying units" aria-label="Search buying units">
+    </div>
+    <div class="ff-tablebox" id="units" data-source="catch_cube buying_units">
+      <table class="ff-table"><thead><tr>
+        <th><button data-k="name">Buying unit</button></th>
+        <th class="ff-hide-narrow"><button data-k="family">Family</button></th>
+        <th class="num"><button data-k="kg">Catch (t)</button></th>
+        <th class="num"><button data-k="idr">Value (IDR)</button></th>
+        <th class="num ff-hide-narrow"><button data-k="price">IDR / kg</button></th>
+        <th class="num ff-hide-narrow"><button data-k="n">Records</button></th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <section class="ff-card" id="districts-card">
+    <div class="ff-row-head">
+      <div><h2>Districts</h2><p class="ff-note">Totals for the current selection. Click a header to sort.</p></div>
+      <input class="ff-search ff-tsearch" id="district-search" type="search" placeholder="Search districts" aria-label="Search districts">
+    </div>
+    <div class="ff-tablebox" id="districts" data-source="catch_cube areas">
+      <table class="ff-table"><thead><tr>
+        <th><button data-k="name">District</button></th>
+        <th class="ff-hide-narrow"><button data-k="province">Province</button></th>
+        <th class="num"><button data-k="kg">Catch (t)</button></th>
+        <th class="num"><button data-k="idr">Value (IDR)</button></th>
+        <th class="num ff-hide-narrow"><button data-k="price">IDR / kg</button></th>
+        <th class="num ff-hide-narrow"><button data-k="n">Records</button></th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <section class="ff-card" id="areas-card">
+    <div class="ff-row-head">
+      <div><h2>Managed access areas</h2><p class="ff-note">Totals for the current selection. Fishers counts people recorded in the area across all years and buying units.</p></div>
+      <input class="ff-search ff-tsearch" id="area-search" type="search" placeholder="Search areas" aria-label="Search managed access areas">
+    </div>
+    <div class="ff-tablebox" id="areas" data-source="catch_cube areas">
+      <table class="ff-table"><thead><tr>
+        <th><button data-k="name">Area</button></th>
+        <th class="ff-hide-narrow"><button data-k="district">District</button></th>
+        <th class="num"><button data-k="kg">Catch (t)</button></th>
+        <th class="num"><button data-k="idr">Value (IDR)</button></th>
+        <th class="num ff-hide-narrow"><button data-k="n">Records</button></th>
+        <th class="num ff-hide-narrow"><button data-k="fishers">Fishers</button></th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <footer class="ff-foot" id="about">
+    <p>Source: Rare Fish Forever catch monitoring data (data.rare.org), updated <span id="ff-generated">—</span> (latest catch record <span id="ff-latest">—</span>). Values are in Indonesian rupiah as recorded. Figures are totals of catch records as entered; a few very large records are kept as recorded.</p>
+    <p>To protect privacy, this page holds only aggregated totals. No fisher or buyer names or IDs are included.</p>
+  </footer>
+</div>
+
+<script>
+window.FF = (() => {
+  const famName = { Scombridae: 'tunas & mackerels', Carangidae: 'jacks & scads', Engraulidae: 'anchovies', Lethrinidae: 'emperors', Serranidae: 'groupers', Lutjanidae: 'snappers', Nemipteridae: 'threadfin breams', Octopodidae: 'octopus', Loliginidae: 'squid', Istiophoridae: 'marlins & sailfish', Siganidae: 'rabbitfish', Scaridae: 'parrotfish', Portunidae: 'swimming crabs', Haemulidae: 'sweetlips', Sepiidae: 'cuttlefish', Caesionidae: 'fusiliers', Mugilidae: 'mullets', Sphyraenidae: 'barracudas', Coryphaenidae: 'mahi-mahi', Belonidae: 'needlefish', Balistidae: 'triggerfish', Monacanthidae: 'filefish', Penaeidae: 'shrimps', Acanthuridae: 'surgeonfish', Labridae: 'wrasses', Mullidae: 'goatfish', Holocentridae: 'squirrelfish', Other: 'other families' };
+  const gearName = { 'Pancing': 'hook & line', 'Pukat Cincin dan Jaring Lingkar': 'purse & ring nets', 'Pukat Tarik': 'seine net', 'Bagan': 'lift net', 'Panah': 'spear gun', 'Sero': 'fence trap', 'Jaring Insang': 'gillnet', 'Bubu': 'pot trap', 'Pukat Hela': 'trawl', 'Jala Tebar': 'cast net', 'Tombak': 'spear', 'Penggaruk': 'rake', 'Meti-Meti': 'gleaning' };
+  const compact = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
+  const fmt = {
+    int: d3.format(','),
+    t: (kg) => kg / 1000 >= 100 ? d3.format(',.0f')(kg / 1000) : d3.format(',.1f')(kg / 1000),
+    tUnit: (kg) => d3.format(',.0f')(kg / 1000) + ' t',
+    tTip: (kg) => d3.format(',.1f')(kg / 1000) + ' t',
+    idr: (v) => 'Rp ' + (v >= 10000 ? compact.format(v) : d3.format(',.0f')(v)),
+    idrFull: (v) => 'Rp ' + d3.format(',.0f')(v),
+    perKg: (v) => 'Rp ' + d3.format(',.0f')(v),
+    pct: d3.format('.0%'),
+  };
+  const csvNum = (x) => Number(x);
+  // Parsed lookups, cached by the data arrays they came from
+  let cache = { src: null };
+  const model = () => {
+    const c = dash.data('catch_cube'), a = dash.data('areas'), b = dash.data('buying_units'), g = dash.data('gears');
+    if ([c, a, b, g].some((d) => d.status !== 'ok')) return null;
+    if (cache.src !== c.data || cache.a !== a.data || cache.b !== b.data || cache.g !== g.data) {
+      const areas = new Map(a.data.map((r) => [String(r.a), { id: String(r.a), province: r.province, district: r.district, dkey: r.province + '|' + r.district, name: r.managed_area, fishers: csvNum(r.fishers_all_years) }]));
+      const sentence = (s) => { const x = String(s || '').trim().toLowerCase(); return x.charAt(0).toUpperCase() + x.slice(1); };
+      const units = new Map(b.data.map((r) => [String(r.b), { id: String(r.b), name: sentence(r.buying_unit), species: r.species, family: r.family || 'Unknown', local: r.local_name }]));
+      const gears = new Map(g.data.map((r) => [String(r.g), r.gear]));
+      const rows = c.data.map((r) => { const m = csvNum(r.m); return { m, year: 2019 + Math.floor(m / 12), a: String(r.a), b: String(r.b), g: String(r.g), kg: csvNum(r.kg), idr: csvNum(r.idr), n: csvNum(r.n) }; });
+      cache = { src: c.data, a: a.data, b: b.data, g: g.data, areas, units, gears, rows, maxMonth: d3.max(rows, (r) => r.m) ?? 0, years: [...new Set(rows.map((r) => r.year))].sort((x, y) => x - y), key: null, sel: null };
+    }
+    return cache;
+  };
+  const P = () => {
+    const p = dash.params();
+    let y0 = Number(p.y0 ?? 2019), y1 = Number(p.y1 ?? 2026);
+    if (y0 > y1) [y0, y1] = [y1, y0];
+    const list = (v) => Array.isArray(v) ? v.map(String) : [];
+    return { provs: list(p.provinces), dists: list(p.districts), areas: list(p.areas), fams: list(p.families), units: list(p.units), y0, y1, metric: p.metric || 'kg' };
+  };
+  // Which areas the location filters allow
+  const areaOk = (M, f) => {
+    const ps = new Set(f.provs), ds = new Set(f.dists), as = new Set(f.areas);
+    return (ar) => (!ps.size || ps.has(ar.province)) && (!ds.size || ds.has(ar.dkey)) && (!as.size || as.has(ar.id));
+  };
+  const selected = () => {
+    const M = model(); if (!M) return null;
+    const f = P(); const key = JSON.stringify(f);
+    if (M.key === key) return M.sel;
+    const ok = areaOk(M, f); const us = new Set(f.units), fs = new Set(f.fams);
+    const allowed = new Set([...M.areas.values()].filter(ok).map((x) => x.id));
+    const rows = M.rows.filter((r) => r.year >= f.y0 && r.year <= f.y1 && allowed.has(r.a) && (!us.size || us.has(r.b)) && (!fs.size || fs.has(M.units.get(r.b)?.family || 'Unknown')));
+    M.key = key; M.sel = { f, rows, kg: d3.sum(rows, (r) => r.kg), idr: d3.sum(rows, (r) => r.idr), n: d3.sum(rows, (r) => r.n) };
+    return M.sel;
+  };
+  const label = (f) => {
+    const yrs = f.y0 === f.y1 ? String(f.y0) : f.y0 + '–' + f.y1;
+    const loc = f.areas.length ? `${f.areas.length} area${f.areas.length > 1 ? 's' : ''}` : f.dists.length ? `${f.dists.length} district${f.dists.length > 1 ? 's' : ''}` : f.provs.length ? (f.provs.length === 1 ? f.provs[0] : `${f.provs.length} provinces`) : 'All provinces';
+    return `${yrs} · ${loc}${f.fams.length ? ` · ${f.fams.length === 1 ? f.fams[0] : f.fams.length + ' families'}` : ''}${f.units.length ? ` · ${f.units.length} buying unit${f.units.length > 1 ? 's' : ''}` : ''}`;
+  };
+  const statusOf = (...ids) => { const s = ids.map((i) => dash.data(i).status); return s.includes('error') ? 'error' : s.every((x) => x === 'ok') ? 'ok' : 'loading'; };
+  const fail = (el) => { el.classList.remove('dash-skeleton'); const d = document.createElement('div'); d.className = 'ff-fail'; d.textContent = 'Failed to load'; el.replaceChildren(d); };
+  const empty = (el) => { el.classList.remove('dash-skeleton'); const d = document.createElement('div'); d.className = 'ff-empty'; d.textContent = 'No catch records match these filters.'; el.replaceChildren(d); };
+  const tip = (card) => {
+    let t = card.querySelector(':scope > .ff-tip');
+    if (!t) { t = document.createElement('div'); t.className = 'ff-tip'; t.hidden = true; card.appendChild(t); }
+    return {
+      show(event, head, lines) {
+        const h = document.createElement('div'); h.className = 'ff-tip-head'; h.textContent = head;
+        const ls = lines.map(([c, name, val]) => { const l = document.createElement('div'); l.className = 'ff-tip-line'; if (c) { const s = document.createElement('i'); s.className = 'ff-sw'; s.style.background = c; l.appendChild(s); } const n = document.createElement('span'); n.textContent = name ? name + ' ' : ''; const v = document.createElement('b'); v.textContent = val; l.append(n, v); return l; });
+        t.replaceChildren(h, ...ls); t.hidden = false;
+        const box = card.getBoundingClientRect();
+        let x = event.clientX - box.left + 12, y = event.clientY - box.top + 12;
+        const w = t.offsetWidth, hh = t.offsetHeight;
+        if (x + w > box.width - 4) x = Math.max(4, event.clientX - box.left - w - 12);
+        if (y + hh > box.height - 4) y = Math.max(4, event.clientY - box.top - hh - 12);
+        t.style.left = x + 'px'; t.style.top = y + 'px';
+      },
+      hide() { t.hidden = true; },
+    };
+  };
+  const sortTable = (table, state, render) => table.querySelectorAll('th button').forEach((b) => b.addEventListener('click', () => {
+    const k = b.dataset.k;
+    state.dir = state.key === k ? -state.dir : (['name', 'district', 'province', 'family'].includes(k) ? 1 : -1);
+    state.key = k; render();
+  }));
+  const setSort = (table, state) => table.querySelectorAll('th').forEach((th) => {
+    const k = th.querySelector('button').dataset.k;
+    th.setAttribute('aria-sort', k === state.key ? (state.dir > 0 ? 'ascending' : 'descending') : 'none');
+  });
+  const cmp = (state) => (a, b) => { const x = a[state.key], y = b[state.key]; return (typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y))) * state.dir; };
+  return { famName, gearName, fmt, model, P, areaOk, selected, label, statusOf, fail, empty, tip, sortTable, setSort, cmp };
+})();
+</script>
+
+<script>
+(() => {
+  // A multi-select dropdown with search, select all and clear
+  const openers = [];
+  const make = (host, { all, param }) => {
+    const title = host.textContent.trim(); host.textContent = title;
+    const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'ff-ms-btn'; btn.setAttribute('aria-expanded', 'false'); btn.setAttribute('aria-label', title);
+    const txt = document.createElement('span'); txt.textContent = all; btn.appendChild(txt);
+    const pop = document.createElement('div'); pop.className = 'ff-ms-pop'; pop.hidden = true;
+    const q = document.createElement('input'); q.type = 'search'; q.className = 'ff-search'; q.placeholder = 'Search ' + title.toLowerCase(); q.setAttribute('aria-label', 'Search ' + title.toLowerCase());
+    const acts = document.createElement('div'); acts.className = 'ff-ms-actions';
+    const count = document.createElement('span');
+    const btns = document.createElement('span'); btns.style.display = 'flex'; btns.style.gap = '12px';
+    const selAll = document.createElement('button'); selAll.type = 'button'; selAll.textContent = 'Select shown';
+    const clear = document.createElement('button'); clear.type = 'button'; clear.textContent = 'Clear';
+    btns.append(selAll, clear); acts.append(count, btns);
+    const list = document.createElement('div'); list.className = 'ff-ms-list'; list.setAttribute('role', 'group');
+    pop.append(q, acts, list); host.append(btn, pop);
+    let options = [], picked = [];
+    const shown = () => { const t = q.value.trim().toLowerCase(); return options.filter((o) => !t || (o.label + ' ' + (o.sub || '') + ' ' + (o.group || '')).toLowerCase().includes(t)); };
+    const drawList = () => {
+      const set = new Set(picked); const items = []; let grp = null;
+      for (const o of shown().slice(0, 500)) {
+        if (o.group && o.group !== grp) { grp = o.group; const g = document.createElement('div'); g.className = 'ff-ms-group'; g.textContent = grp; items.push(g); }
+        const l = document.createElement('label'); const cb = document.createElement('input'); cb.type = 'checkbox'; cb.value = o.value; cb.checked = set.has(o.value);
+        const s = document.createElement('span'); s.textContent = o.label;
+        if (o.sub) { const sm = document.createElement('small'); sm.textContent = o.sub; s.appendChild(sm); }
+        cb.addEventListener('change', () => { const next = new Set(picked); cb.checked ? next.add(o.value) : next.delete(o.value); dash.setParams({ [param]: [...next] }); });
+        l.append(cb, s); items.push(l);
+      }
+      list.replaceChildren(...items);
+      count.textContent = picked.length ? `${picked.length} selected` : `All ${options.length}`;
+    };
+    const setOpen = (v) => { pop.hidden = !v; btn.setAttribute('aria-expanded', String(v)); if (v) { openers.forEach((o) => o !== api && o.close()); drawList(); q.focus(); } };
+    btn.addEventListener('click', () => setOpen(pop.hidden));
+    q.addEventListener('input', drawList);
+    selAll.addEventListener('click', () => dash.setParams({ [param]: [...new Set([...picked, ...shown().map((o) => o.value)])] }));
+    clear.addEventListener('click', () => dash.setParams({ [param]: [] }));
+    pop.addEventListener('keydown', (e) => { if (e.key === 'Escape') { setOpen(false); btn.focus(); } });
+    const api = {
+      host, close: () => setOpen(false),
+      update(opts, sel) {
+        options = opts; picked = sel;
+        const names = sel.map((v) => (opts.find((o) => o.value === v) || {}).label).filter(Boolean);
+        txt.textContent = !sel.length ? all : sel.length === 1 ? names[0] || '1 selected' : `${sel.length} selected`;
+        if (!pop.hidden) drawList();
+      },
+    };
+    openers.push(api); return api;
+  };
+  document.addEventListener('click', (e) => openers.forEach((o) => { if (!o.host.contains(e.target)) o.close(); }));
+
+  const msProv = make(document.getElementById('ms-prov'), { all: 'All provinces', param: 'provinces' });
+  const msDist = make(document.getElementById('ms-dist'), { all: 'All districts', param: 'districts' });
+  const msArea = make(document.getElementById('ms-area'), { all: 'All areas', param: 'areas' });
+  const msFam = make(document.getElementById('ms-fam'), { all: 'All families', param: 'families' });
+  const msUnit = make(document.getElementById('ms-unit'), { all: 'All buying units', param: 'units' });
+  const y0 = document.querySelector('.ff-y0'), y1 = document.querySelector('.ff-y1');
+  y0.addEventListener('change', () => dash.setParams({ y0: Number(y0.value) }));
+  y1.addEventListener('change', () => dash.setParams({ y1: Number(y1.value) }));
+  document.querySelector('.ff-reset').addEventListener('click', () => dash.resetParams());
+  document.querySelectorAll('#metric-toggle .ff-btn').forEach((b) => b.addEventListener('click', () => dash.setParams({ metric: b.dataset.m })));
+
+  dash.onData(() => {
+    const f = FF.P(), M = FF.model();
+    document.querySelectorAll('#metric-toggle .ff-btn').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.m === f.metric)));
+    if (!M) return;
+    const areas = [...M.areas.values()];
+    // Drop picks that the wider filters no longer allow
+    const provs = [...new Set(areas.map((a) => a.province))].sort();
+    const distScope = areas.filter((a) => !f.provs.length || f.provs.includes(a.province));
+    const dkeys = new Set(distScope.map((a) => a.dkey));
+    const areaScope = distScope.filter((a) => !f.dists.length || f.dists.includes(a.dkey));
+    const akeys = new Set(areaScope.map((a) => a.id));
+    const dists = f.dists.filter((d) => dkeys.has(d)), ars = f.areas.filter((a) => akeys.has(a));
+    if (dists.length !== f.dists.length || ars.length !== f.areas.length) { dash.setParams({ districts: dists, areas: ars }); return; }
+    msProv.update(provs.map((p) => ({ value: p, label: p })), f.provs);
+    const dOpts = [...d3.group(distScope, (a) => a.dkey)].map(([k, v]) => ({ value: k, label: v[0].district, group: v[0].province })).sort((a, b) => a.group.localeCompare(b.group) || a.label.localeCompare(b.label));
+    msDist.update(dOpts, f.dists);
+    const aOpts = areaScope.map((a) => ({ value: a.id, label: a.name, group: a.district + ', ' + a.province })).sort((a, b) => a.group.localeCompare(b.group) || (a.label.startsWith('Outside') - b.label.startsWith('Outside')) || a.label.localeCompare(b.label));
+    msArea.update(aOpts, f.areas);
+    // Families and buying units with catch in the chosen places and years, A to Z
+    const unitKg = d3.rollup(M.rows.filter((r) => akeys.has(r.a) && (!f.areas.length || f.areas.includes(r.a)) && r.year >= f.y0 && r.year <= f.y1), (v) => d3.sum(v, (r) => r.kg), (r) => r.b);
+    const famKg = d3.rollup([...unitKg], (v) => d3.sum(v, ([, kg]) => kg), ([b]) => M.units.get(b)?.family || 'Unknown');
+    const fOpts = [...new Set([...famKg.keys(), ...f.fams])].sort((a, b) => a.localeCompare(b))
+      .map((fm) => ({ value: fm, label: fm, sub: `${FF.famName[fm] ? FF.famName[fm] + ' · ' : ''}${FF.fmt.tTip(famKg.get(fm) || 0)}` }));
+    msFam.update(fOpts, f.fams);
+    const units = f.units.filter((u) => !f.fams.length || f.fams.includes(M.units.get(u)?.family || 'Unknown'));
+    if (units.length !== f.units.length) { dash.setParams({ units }); return; }
+    const uOpts = [...M.units.values()].filter((u) => (unitKg.has(u.id) || f.units.includes(u.id)) && (!f.fams.length || f.fams.includes(u.family)))
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((u) => ({ value: u.id, label: u.name, sub: `${u.local} · ${u.family} · ${FF.fmt.tTip(unitKg.get(u.id) || 0)}` }));
+    msUnit.update(uOpts, f.units);
+    y0.replaceChildren(...M.years.map((y) => new Option(y, y)));
+    y1.replaceChildren(...M.years.map((y) => new Option(y, y)));
+    y0.value = String(f.y0); y1.value = String(f.y1);
+  });
+})();
+</script>
+
+<script>
+(() => {
+  const { fmt } = FF;
+  dash.onData(() => {
+    const kpis = ['catch', 'value', 'price', 'records'].map((k) => document.getElementById('kpi-' + k));
+    const st = FF.statusOf('catch_cube', 'areas', 'buying_units', 'gears');
+    const S = st === 'ok' ? FF.selected() : null;
+    if (!S) {
+      kpis.forEach((c) => { const v = c.querySelector('.ff-kpi-value'); v.textContent = st === 'error' ? 'Failed to load' : '—'; v.classList.toggle('dash-skeleton', st === 'loading'); });
+    } else {
+      const f = S.f, months = new Set(S.rows.map((r) => r.m)).size;
+      const vals = [fmt.tUnit(S.kg), fmt.idr(S.idr), S.kg ? fmt.perKg(S.idr / S.kg) : '—', fmt.int(S.n)];
+      const notes = [FF.label(f), FF.label(f), 'Value ÷ catch weight', months ? `${fmt.int(Math.round(S.n / months))} a month on average` : FF.label(f)];
+      kpis.forEach((c, i) => { const v = c.querySelector('.ff-kpi-value'); v.classList.remove('dash-skeleton'); v.textContent = vals[i]; c.querySelector('.ff-kpi-note').textContent = notes[i]; });
+      const M = FF.model(), take = document.getElementById('takeaway');
+      take.classList.remove('dash-skeleton');
+      const when = f.y0 === f.y1 ? 'In ' + f.y0 : 'From ' + f.y0 + ' to ' + f.y1;
+      if (!S.rows.length) take.textContent = `${when}, no catch records match these filters.`;
+      else {
+        let s = `${when}, the selection recorded ${fmt.tUnit(S.kg)} of catch worth ${fmt.idr(S.idr)}.`;
+        const top = d3.rollups(S.rows, (v) => d3.sum(v, (r) => r.kg), (r) => r.b).sort((a, b) => b[1] - a[1])[0];
+        const dist = d3.rollups(S.rows, (v) => d3.sum(v, (r) => r.kg), (r) => M.areas.get(r.a).district).sort((a, b) => b[1] - a[1]);
+        if (top && S.kg) { const u = M.units.get(top[0]); s += ` ${u.name} (${u.local}) was the largest buying unit at ${fmt.pct(top[1] / S.kg)} of the weight`; }
+        if (dist.length > 1 && S.kg) s += `, and ${dist[0][0]} the largest district (${fmt.pct(dist[0][1] / S.kg)}).`; else s += '.';
+        take.textContent = s;
+      }
+    }
+    const sum = dash.data('summary'), snap = document.getElementById('snapshot');
+    if (sum.status === 'ok' && sum.data.length) {
+      const r = sum.data[0]; snap.classList.remove('dash-skeleton');
+      const d = (x) => d3.utcFormat('%b %-d, %Y')(new Date(x + 'T00:00:00Z'));
+      snap.textContent = `Snapshot of ${fmt.int(Number(r.records))} catch records from ${fmt.int(Number(r.fishers))} fishers and ${fmt.int(Number(r.species))} species, ${d(r.first_date)} to ${d(r.last_date)}.`;
+    } else if (sum.status !== 'loading') { snap.classList.remove('dash-skeleton'); snap.textContent = '—'; }
+  });
+})();
+</script>
+
+<script>
+(() => {
+  const { fmt } = FF;
+  const box = document.getElementById('trend'), card = document.getElementById('trend-card');
+  const tip = FF.tip(card);
+  const names = { kg: 'Catch', idr: 'Value', n: 'Records' };
+  const f1 = { kg: fmt.tTip, idr: fmt.idrFull, n: fmt.int };
+  const axisF = { kg: (v) => d3.format('~s')(v / 1000) + ' t', idr: (v) => 'Rp ' + d3.format('~s')(v).replace('G', 'B'), n: d3.format('~s') };
+  dash.onData(() => {
+    const st = FF.statusOf('catch_cube', 'areas', 'buying_units', 'gears');
+    if (st === 'error') return FF.fail(box);
+    if (st !== 'ok') { box.replaceChildren(); box.classList.add('dash-skeleton'); return; }
+    box.classList.remove('dash-skeleton');
+    const S = FF.selected(), f = S.f, mk = ['kg', 'idr', 'n'].includes(f.metric) ? f.metric : 'kg';
+    if (!S.rows.length) return FF.empty(box);
+    const all = [];
+    for (let m = (f.y0 - 2019) * 12; m <= Math.min((f.y1 - 2019) * 12 + 11, FF.model().maxMonth); m++) all.push(m);
+    const byM = d3.rollup(S.rows, (v) => d3.sum(v, (r) => r[mk]), (r) => r.m);
+    const series = all.map((m) => ({ m, v: byM.get(m) || 0 }));
+    const mDate = (m) => new Date(Date.UTC(2019 + Math.floor(m / 12), m % 12, 1));
+    const W = Math.max(280, box.clientWidth), H = 280;
+    const y = d3.scaleLinear([0, d3.max(series, (s) => s.v) || 1], [H - 26, 10]).nice();
+    const ticks = y.ticks(5);
+    const svg = d3.create('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`).attr('role', 'img').attr('aria-label', names[mk] + ' per month');
+    document.body.appendChild(svg.node());
+    let ml = 0; const meas = svg.append('g');
+    ticks.forEach((t) => { const tx = meas.append('text').attr('font-size', 12).text(axisF[mk](t)); ml = Math.max(ml, tx.node().getComputedTextLength()); });
+    meas.remove(); svg.node().remove();
+    ml = Math.ceil(ml) + 10;
+    const x = d3.scaleBand(all, [ml, W - 6]).paddingInner(0.2);
+    svg.append('g').selectAll('line').data(ticks).join('line').attr('x1', ml).attr('x2', W - 6).attr('y1', (t) => y(t)).attr('y2', (t) => y(t)).attr('stroke', 'var(--cds-chart-grid)');
+    svg.append('g').selectAll('text').data(ticks).join('text').attr('x', ml - 8).attr('y', (t) => y(t)).attr('dy', '0.32em').attr('text-anchor', 'end').attr('font-size', 12).attr('fill', 'var(--color-fg-muted)').text((t) => axisF[mk](t));
+    const nYears = f.y1 - f.y0 + 1, step = nYears > 6 && W < 700 ? 2 : 1;
+    const xt = nYears === 1 ? all.filter((m, i) => i % (W < 500 ? 3 : 2) === 0) : all.filter((m) => m % 12 === 0 && (Math.floor(m / 12) + 2019 - f.y0) % step === 0);
+    svg.append('g').selectAll('text').data(xt).join('text').attr('x', (m) => x(m)).attr('y', H - 6).attr('font-size', 12).attr('fill', 'var(--color-fg-muted)')
+      .text((m) => nYears === 1 ? d3.utcFormat('%b')(mDate(m)) : String(2019 + Math.floor(m / 12)));
+    svg.append('line').attr('x1', ml).attr('x2', W - 6).attr('y1', y(0)).attr('y2', y(0)).attr('stroke', 'var(--cds-chart-axis)');
+    const bars = svg.append('g').selectAll('rect').data(series).join('rect')
+      .attr('x', (s) => x(s.m)).attr('width', Math.max(1, x.bandwidth())).attr('y', (s) => y(s.v)).attr('height', (s) => Math.max(0, y(0) - y(s.v)))
+      .attr('rx', Math.min(4, x.bandwidth() / 2)).attr('fill', dash.colors[0]);
+    svg.append('g').selectAll('rect').data(series).join('rect').attr('x', (s) => x(s.m) - x.step() * 0.1).attr('width', x.step()).attr('y', 0).attr('height', H - 20).attr('fill', 'transparent')
+      .on('mousemove', (event, s) => { bars.attr('opacity', (b) => b === s ? 1 : 0.45); tip.show(event, d3.utcFormat('%B %Y')(mDate(s.m)), [[null, names[mk], f1[mk](s.v)]]); })
+      .on('mouseleave', () => { bars.attr('opacity', 1); tip.hide(); });
+    box.replaceChildren(svg.node());
+  });
+})();
+</script>
+
+<script>
+(() => {
+  const { fmt } = FF;
+  const draw = (id, keyOf, nameMap, color, otherKey) => {
+    const box = document.getElementById(id), card = document.getElementById(id + '-card');
+    const tip = FF.tip(card);
+    let animated = false;
+    dash.onData(() => {
+      const st = FF.statusOf('catch_cube', 'areas', 'buying_units', 'gears');
+      if (st === 'error') return FF.fail(box);
+      if (st !== 'ok') { box.replaceChildren(); box.classList.add('dash-skeleton'); return; }
+      box.classList.remove('dash-skeleton');
+      const S = FF.selected(), M = FF.model();
+      if (!S.rows.length || !S.kg) return FF.empty(box);
+      let g = d3.rollups(S.rows, (v) => ({ kg: d3.sum(v, (r) => r.kg), idr: d3.sum(v, (r) => r.idr) }), (r) => keyOf(r, M)).map(([k, v]) => ({ k, ...v })).filter((r) => r.kg > 0).sort((a, b) => b.kg - a.kg);
+      if (otherKey && g.length > 13) { const rest = g.slice(12); g = g.slice(0, 12); g.push({ k: otherKey, kg: d3.sum(rest, (r) => r.kg), idr: d3.sum(rest, (r) => r.idr) }); }
+      const muted = (k) => k === 'Other' || k === 'Not recorded' || k === 'Unknown';
+      g.sort((a, b) => muted(a.k) - muted(b.k) || b.kg - a.kg);
+      const max = d3.max(g, (r) => r.kg) || 1;
+      const rows = g.map((r) => {
+        const row = document.createElement('div'); row.className = 'ff-bar-row';
+        const lab = document.createElement('div'); lab.className = 'ff-bar-label'; lab.textContent = r.k + ' ';
+        if (nameMap[r.k]) { const sm = document.createElement('small'); sm.textContent = nameMap[r.k]; lab.appendChild(sm); }
+        const tr = document.createElement('div'); tr.className = 'ff-bar-track';
+        const fl = document.createElement('div'); fl.className = 'ff-bar-fill'; fl.style.width = (100 * r.kg / max) + '%';
+        fl.style.background = muted(r.k) ? 'var(--cds-chart-muted)' : color;
+        tr.appendChild(fl);
+        const val = document.createElement('div'); val.className = 'ff-bar-val'; val.textContent = fmt.pct(r.kg / S.kg);
+        row.append(lab, tr, val);
+        row.addEventListener('mousemove', (e) => tip.show(e, r.k + (nameMap[r.k] ? ' · ' + nameMap[r.k] : ''), [[null, 'Catch', fmt.tTip(r.kg)], [null, 'Value', fmt.idrFull(r.idr)], [null, 'Price', fmt.perKg(r.idr / r.kg) + ' / kg']]));
+        row.addEventListener('mouseleave', () => tip.hide());
+        return row;
+      });
+      if (!animated && rows.length) { box.classList.add('ff-anim'); animated = true; } else box.classList.remove('ff-anim');
+      box.replaceChildren(...rows);
+    });
+  };
+  draw('families', (r, M) => M.units.get(r.b)?.family || 'Unknown', FF.famName, dash.colors[0], 'Other');
+  draw('gears', (r, M) => M.gears.get(r.g) || 'Not recorded', FF.gearName, dash.colors[1], null);
+})();
+</script>
+
+<script>
+(() => {
+  const { fmt } = FF;
+  const box = document.getElementById('price'), leg = document.getElementById('price-legend'), card = document.getElementById('price-card');
+  const tip = FF.tip(card);
+  dash.onData(() => {
+    const st = FF.statusOf('catch_cube', 'areas', 'buying_units', 'gears');
+    if (st === 'error') { leg.replaceChildren(); return FF.fail(box); }
+    if (st !== 'ok') { box.replaceChildren(); leg.replaceChildren(); box.classList.add('dash-skeleton'); return; }
+    box.classList.remove('dash-skeleton');
+    const S = FF.selected(), M = FF.model(), f = S.f;
+    if (!S.rows.length || !S.kg) { leg.replaceChildren(); return FF.empty(box); }
+    const famOf = (r) => M.units.get(r.b)?.family || 'Unknown';
+    const fams = d3.rollups(S.rows, (v) => d3.sum(v, (r) => r.kg), famOf).filter(([k]) => k !== 'Unknown').sort((a, b) => b[1] - a[1]).slice(0, 6).map(([k]) => k);
+    const fset = new Set(fams);
+    const pts = d3.rollups(S.rows.filter((r) => fset.has(famOf(r))), (v) => { const kg = d3.sum(v, (r) => r.kg); return kg > 0 ? d3.sum(v, (r) => r.idr) / kg : null; }, famOf, (r) => r.year)
+      .flatMap(([fam, ys]) => ys.filter(([, p]) => p !== null).map(([year, p]) => ({ fam, year, p })));
+    const years = d3.range(f.y0, f.y1 + 1);
+    const color = (fm) => dash.colors[fams.indexOf(fm) % dash.colors.length];
+    leg.replaceChildren(...fams.map((fm) => { const s = document.createElement('span'); const i = document.createElement('i'); i.className = 'ff-sw'; i.style.background = color(fm); s.append(i, document.createTextNode(fm + (FF.famName[fm] ? ' · ' + FF.famName[fm] : ''))); return s; }));
+    const W = Math.max(280, box.clientWidth), H = 280;
+    const y = d3.scaleLinear([0, d3.max(pts, (r) => r.p) || 1], [H - 26, 12]).nice();
+    const ticks = y.ticks(5);
+    const tf = (v) => 'Rp ' + d3.format('~s')(v);
+    const svg = d3.create('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`).attr('role', 'img').attr('aria-label', 'Average price per kg by family and year');
+    document.body.appendChild(svg.node());
+    let ml = 0; const meas = svg.append('g');
+    ticks.forEach((t) => { const tx = meas.append('text').attr('font-size', 12).text(tf(t)); ml = Math.max(ml, tx.node().getComputedTextLength()); });
+    meas.remove(); svg.node().remove();
+    ml = Math.ceil(ml) + 10;
+    const x = d3.scalePoint(years, [ml + 12, W - 16]);
+    svg.append('g').selectAll('line').data(ticks).join('line').attr('x1', ml).attr('x2', W - 6).attr('y1', (t) => y(t)).attr('y2', (t) => y(t)).attr('stroke', 'var(--cds-chart-grid)');
+    svg.append('g').selectAll('text').data(ticks).join('text').attr('x', ml - 8).attr('y', (t) => y(t)).attr('dy', '0.32em').attr('text-anchor', 'end').attr('font-size', 12).attr('fill', 'var(--color-fg-muted)').text(tf);
+    const every = W < 420 && years.length > 5 ? 2 : 1;
+    svg.append('g').selectAll('text').data(years.filter((yy, i) => i % every === 0)).join('text').attr('x', (yy) => x(yy)).attr('y', H - 6).attr('text-anchor', 'middle').attr('font-size', 12).attr('fill', 'var(--color-fg-muted)').text((yy) => yy);
+    const line = d3.line().x((r) => x(r.year)).y((r) => y(r.p));
+    const byFam = d3.group(pts, (r) => r.fam);
+    svg.append('g').selectAll('path').data(fams.filter((fm) => byFam.has(fm))).join('path')
+      .attr('d', (fm) => line(byFam.get(fm).slice().sort((a, b) => a.year - b.year))).attr('fill', 'none').attr('stroke', (fm) => color(fm)).attr('stroke-width', 2).attr('stroke-linecap', 'round').attr('stroke-linejoin', 'round');
+    svg.append('g').selectAll('circle').data(pts).join('circle').attr('cx', (r) => x(r.year)).attr('cy', (r) => y(r.p)).attr('r', 3).attr('fill', (r) => color(r.fam));
+    const rule = svg.append('line').attr('y1', 10).attr('y2', H - 26).attr('stroke', 'var(--cds-chart-reference)').attr('opacity', 0);
+    svg.append('rect').attr('x', ml).attr('y', 0).attr('width', W - ml).attr('height', H - 20).attr('fill', 'transparent')
+      .on('mousemove', (event) => {
+        const [px] = d3.pointer(event);
+        const yy = years.reduce((a, b) => Math.abs(x(b) - px) < Math.abs(x(a) - px) ? b : a, years[0]);
+        rule.attr('x1', x(yy)).attr('x2', x(yy)).attr('opacity', 1);
+        const at = pts.filter((r) => r.year === yy).sort((a, b) => b.p - a.p);
+        tip.show(event, String(yy), at.length ? at.map((r) => [color(r.fam), r.fam, fmt.perKg(r.p) + ' / kg']) : [[null, 'No records', '']]);
+      })
+      .on('mouseleave', () => { rule.attr('opacity', 0); tip.hide(); });
+    box.replaceChildren(svg.node());
+  });
+})();
+</script>
+
+<script>
+(() => {
+  const { fmt } = FF;
+  const incell = (v, max, text) => { const w = document.createElement('div'); w.className = 'ff-incell'; const b = document.createElement('i'); b.style.width = Math.max(2, 60 * v / (max || 1)) + 'px'; const s = document.createElement('span'); s.textContent = text; w.append(b, s); return w; };
+  const td = (content, cls) => { const c = document.createElement('td'); if (cls) c.className = cls; if (content instanceof Node) c.appendChild(content); else c.textContent = content; return c; };
+  const two = (a, b) => { const d = document.createElement('div'); const x = document.createElement('span'); x.textContent = a; const y = document.createElement('span'); y.className = 'ff-local'; y.textContent = b; d.append(x, y); return d; };
+  const message = (tb, text, isFail) => { const tr = document.createElement('tr'); const c = document.createElement('td'); c.colSpan = 6; const dv = document.createElement('div'); dv.className = isFail ? 'ff-fail' : 'ff-empty'; dv.textContent = text; c.appendChild(dv); tr.appendChild(c); tb.replaceChildren(tr); };
+  const table = (id, searchId, group, cells) => {
+    const box = document.getElementById(id), t = box.querySelector('table'), q = document.getElementById(searchId);
+    const st = { key: 'kg', dir: -1 };
+    const render = () => {
+      const tb = t.querySelector('tbody'); FF.setSort(t, st);
+      const s = FF.statusOf('catch_cube', 'areas', 'buying_units', 'gears');
+      if (s === 'error') return message(tb, 'Failed to load', true);
+      if (s !== 'ok') return tb.replaceChildren();
+      const S = FF.selected(), M = FF.model();
+      if (!S.rows.length) return message(tb, 'No catch records match these filters.');
+      let rows = group(S.rows, M);
+      const term = q.value.trim().toLowerCase();
+      if (term) rows = rows.filter((r) => r.search.toLowerCase().includes(term));
+      rows.sort(FF.cmp(st));
+      const max = d3.max(rows, (r) => r.kg);
+      tb.replaceChildren(...rows.map((r) => { const tr = document.createElement('tr'); tr.append(...cells(r, max)); return tr; }));
+    };
+    FF.sortTable(t, st, render); q.addEventListener('input', render); dash.onData(render);
+  };
+  const totals = (v) => { const kg = d3.sum(v, (r) => r.kg), idr = d3.sum(v, (r) => r.idr); return { kg, idr, n: d3.sum(v, (r) => r.n), price: kg ? idr / kg : 0 }; };
+
+  table('units', 'unit-search', (rows, M) => d3.rollups(rows, totals, (r) => r.b).map(([b, t]) => { const u = M.units.get(b); return { ...t, name: u.name, local: u.local, family: u.family, search: `${u.name} ${u.local} ${u.species} ${u.family}` }; }),
+    (r, max) => [td(two(r.name, r.local)), td(r.family, 'ff-hide-narrow'), td(incell(r.kg, max, fmt.t(r.kg)), 'num'), td(fmt.idrFull(r.idr), 'num'), td(fmt.perKg(r.price), 'num ff-hide-narrow'), td(fmt.int(r.n), 'num ff-hide-narrow')]);
+
+  table('districts', 'district-search', (rows, M) => d3.rollups(rows, totals, (r) => M.areas.get(r.a).dkey).map(([k, t]) => { const [province, name] = k.split('|'); return { ...t, name, province, search: `${name} ${province}` }; }),
+    (r, max) => [td(r.name), td(r.province, 'ff-hide-narrow'), td(incell(r.kg, max, fmt.t(r.kg)), 'num'), td(fmt.idrFull(r.idr), 'num'), td(fmt.perKg(r.price), 'num ff-hide-narrow'), td(fmt.int(r.n), 'num ff-hide-narrow')]);
+
+  table('areas', 'area-search', (rows, M) => d3.rollups(rows, totals, (r) => r.a).map(([a, t]) => { const ar = M.areas.get(a); return { ...t, name: ar.name, district: ar.district, fishers: ar.fishers, search: `${ar.name} ${ar.district} ${ar.province}` }; }),
+    (r, max) => [td(r.name), td(r.district, 'ff-hide-narrow'), td(incell(r.kg, max, fmt.t(r.kg)), 'num'), td(fmt.idrFull(r.idr), 'num'), td(fmt.int(r.n), 'num ff-hide-narrow'), td(fmt.int(r.fishers), 'num ff-hide-narrow')]);
+
+  const named = document.getElementById(location.hash.slice(1));
+  if (named) setTimeout(() => named.scrollIntoView(), 300);
+})();
+</script>
+
+<script>
+(() => {
+  const { fmt } = FF;
+  const box = document.getElementById('ind-chart'), card = document.getElementById('indicators'), stats = document.getElementById('ind-stats'), leg = document.getElementById('ind-legend'), method = document.getElementById('ind-method');
+  const sp = document.getElementById('ind-sp'), spWrap = document.getElementById('ind-sp-wrap');
+  const tip = FF.tip(card);
+  document.querySelectorAll('#ind-toggle .ff-btn').forEach((b) => b.addEventListener('click', () => dash.setParams({ ind: b.dataset.i })));
+  sp.addEventListener('change', () => dash.setParams({ sizeSp: sp.value || null }));
+  const stepWrap = document.getElementById('ind-step-wrap');
+  document.querySelectorAll('#ind-step .ff-btn').forEach((b) => b.addEventListener('click', () => dash.setParams({ step: b.dataset.s })));
+  const DAY = 86400000, T0 = Date.UTC(2019, 0, 1);
+
+  let ext = { s: null, p: null, c: null, t: null };
+  const extra = () => {
+    const sz = dash.data('size_bins'), pr = dash.data('species_params'), dc = dash.data('daily_catch'), dt = dash.data('daily_trips');
+    if ([sz, pr, dc, dt].some((d) => d.status !== 'ok')) return null;
+    if (ext.s !== sz.data || ext.p !== pr.data || ext.c !== dc.data || ext.t !== dt.data) {
+      const yr = (d) => new Date(T0 + d * DAY).getUTCFullYear();
+      ext = {
+        s: sz.data, p: pr.data, c: dc.data, t: dt.data,
+        size: sz.data.map((r) => ({ b: String(r.b), a: String(r.a), year: Number(r.year), len: Number(r.len_cm), fish: Number(r.fish) })),
+        params: new Map(pr.data.filter((r) => r.lmax_cm !== '' && Number(r.lmax_cm) > 0).map((r) => [String(r.b), { lmax: Number(r.lmax_cm), linf: Number(r.linf_cm), lmat: Number(r.lmat_cm), lopt: Number(r.lopt_cm), lmega: Number(r.lmega_cm), a: Number(r.lw_a), bb: Number(r.lw_b) }])),
+        dcatch: dc.data.map((r) => { const d = Number(r.d); return { d, year: yr(d), a: String(r.a), b: String(r.b), kg: Number(r.kg) }; }),
+        dtrips: dt.data.map((r) => { const d = Number(r.d); return { d, year: yr(d), a: String(r.a), trips: Number(r.trips) }; }),
+      };
+    }
+    return ext;
+  };
+
+  // --- statistics ---
+  const lgamma = (x) => { const c = [76.18009172947146, -86.50532032941677, 24.01409824083091, -1.231739572450155, 0.1208650973866179e-2, -0.5395239384953e-5]; let y = x, tmp = x + 5.5; tmp -= (x + 0.5) * Math.log(tmp); let ser = 1.000000000190015; for (const ci of c) ser += ci / ++y; return -tmp + Math.log(2.5066282746310005 * ser / x); };
+  const betacf = (a, b, x) => { let qab = a + b, qap = a + 1, qam = a - 1, c = 1, d = 1 - qab * x / qap; if (Math.abs(d) < 1e-30) d = 1e-30; d = 1 / d; let h = d; for (let m = 1; m <= 200; m++) { const m2 = 2 * m; let aa = m * (b - m) * x / ((qam + m2) * (a + m2)); d = 1 + aa * d; if (Math.abs(d) < 1e-30) d = 1e-30; c = 1 + aa / c; if (Math.abs(c) < 1e-30) c = 1e-30; d = 1 / d; h *= d * c; aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2)); d = 1 + aa * d; if (Math.abs(d) < 1e-30) d = 1e-30; c = 1 + aa / c; if (Math.abs(c) < 1e-30) c = 1e-30; d = 1 / d; const del = d * c; h *= del; if (Math.abs(del - 1) < 3e-12) break; } return h; };
+  const ibeta = (x, a, b) => { if (x <= 0) return 0; if (x >= 1) return 1; const bt = Math.exp(lgamma(a + b) - lgamma(a) - lgamma(b) + a * Math.log(x) + b * Math.log(1 - x)); return x < (a + 1) / (a + b + 2) ? bt * betacf(a, b, x) / a : 1 - bt * betacf(b, a, 1 - x) / b; };
+  const pT2 = (t, df) => ibeta(df / (df + t * t), df / 2, 0.5); // two-sided p
+  const qT975 = (df) => { if (df > 1e6) return 1.959964; let lo = 1.9, hi = 20; for (let i = 0; i < 60; i++) { const mid = (lo + hi) / 2; if (pT2(mid, df) > 0.05) lo = mid; else hi = mid; } return (lo + hi) / 2; };
+  // Gaussian GLM y ~ date (identity link): ordinary least squares
+  const glm = (xs, ys) => {
+    const n = xs.length; if (n < 3) return null;
+    const mx = d3.mean(xs), my = d3.mean(ys);
+    let sxx = 0, sxy = 0; for (let i = 0; i < n; i++) { sxx += (xs[i] - mx) ** 2; sxy += (xs[i] - mx) * (ys[i] - my); }
+    if (!sxx) return null;
+    const b = sxy / sxx, a = my - b * mx;
+    let rss = 0; for (let i = 0; i < n; i++) rss += (ys[i] - a - b * xs[i]) ** 2;
+    const df = n - 2, se = Math.sqrt(rss / df / sxx), t = se ? b / se : 0, p = se ? pT2(t, df) : 1;
+    const padj = Math.min(1, p); // p.adjust over one group leaves p unchanged
+    const trend = padj < 0.05 ? (b >= 0 ? 'Increased' : 'Decreased') : 'Stable';
+    return { b, se, t, p, padj, trend, n };
+  };
+  // LOESS like R loess(span, degree = 2, family = "gaussian"), with geom_smooth-style 95% band
+  const loess = (xs, ys, span, grid) => {
+    const n = xs.length, q = Math.max(3, Math.min(n, Math.floor(span * n)));
+    const rowAt = (x0) => {
+      // q nearest points form a window in sorted xs
+      let lo = d3.bisectLeft(xs, x0) - 1, hi = lo + 1, taken = 0;
+      while (taken < q) { if (lo < 0) hi++; else if (hi >= n) lo--; else if (x0 - xs[lo] <= xs[hi] - x0) lo--; else hi++; taken++; }
+      const L = lo + 1, H = hi - 1;
+      let dq = Math.max(x0 - xs[L], xs[H] - x0); if (q >= n) dq *= q / n; if (!dq) dq = 1;
+      const sc = dq; let s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0; const w = new Float64Array(H - L + 1);
+      for (let i = L; i <= H; i++) { const u = Math.abs(xs[i] - x0) / dq; const wi = u < 1 ? (1 - u ** 3) ** 3 : 0; w[i - L] = wi; const z = (xs[i] - x0) / sc; s0 += wi; s1 += wi * z; s2 += wi * z * z; s3 += wi * z ** 3; s4 += wi * z ** 4; }
+      // first row of the inverse of [[s0,s1,s2],[s1,s2,s3],[s2,s3,s4]]
+      const det = s0 * (s2 * s4 - s3 * s3) - s1 * (s1 * s4 - s3 * s2) + s2 * (s1 * s3 - s2 * s2);
+      if (Math.abs(det) < 1e-12) return null;
+      const c0 = (s2 * s4 - s3 * s3) / det, c1 = -(s1 * s4 - s2 * s3) / det, c2 = (s1 * s3 - s2 * s2) / det;
+      const l = new Float64Array(H - L + 1);
+      for (let i = L; i <= H; i++) { const z = (xs[i] - x0) / sc; l[i - L] = w[i - L] * (c0 + c1 * z + c2 * z * z); }
+      return { L, l };
+    };
+    // residual scale from the fit at every data point (exact trace terms)
+    let rss = 0, trL = 0, trLL = 0; const lsq = new Float64Array(n), cols = new Float64Array(n);
+    for (let j = 0; j < n; j++) { const r = rowAt(xs[j]); if (!r) continue; let fit = 0; for (let k = 0; k < r.l.length; k++) { const i = r.L + k; fit += r.l[k] * ys[i]; trLL += r.l[k] ** 2; cols[i] += 0; if (i === j) trL += r.l[k]; } rss += (ys[j] - fit) ** 2; }
+    const delta1 = Math.max(1, n - 2 * trL + trLL);
+    const s = Math.sqrt(rss / delta1), tq = qT975(Math.max(1, n - trL));
+    return grid.map((x0) => { const r = rowAt(x0); if (!r) return null; let fit = 0, ss = 0; for (let k = 0; k < r.l.length; k++) { fit += r.l[k] * ys[r.L + k]; ss += r.l[k] ** 2; } const se = s * Math.sqrt(ss); return { x: x0, fit, lo: fit - tq * se, hi: fit + tq * se }; }).filter(Boolean);
+  };
+
+  const stat = (label, value) => { const d = document.createElement('div'); d.className = 'ff-ind-stat'; const s = document.createElement('span'); s.textContent = label; const b = document.createElement('b'); b.textContent = value; d.append(s, b); return d; };
+  const pFmt = (p) => p < 0.001 ? '< 0.001' : d3.format('.3f')(p);
+  const TREND_COLORS = { Increased: '#00833e', Stable: '#e78828', Decreased: '#B50A37' };
+  const trendColor = (tr) => TREND_COLORS[tr] || 'var(--color-fg-muted)';
+
+  // Daily series for the filters: landings (kg per day) or CPUE (kg per fisher-trip)
+  const daily = (E, M, f, kind, step) => {
+    const ok = FF.areaOk(M, f); const allowed = new Set([...M.areas.values()].filter(ok).map((a) => a.id));
+    const us = new Set(f.units), fs = new Set(f.fams);
+    const kg = d3.rollup(E.dcatch.filter((r) => r.year >= f.y0 && r.year <= f.y1 && allowed.has(r.a) && (!us.size || us.has(r.b)) && (!fs.size || fs.has(M.units.get(r.b)?.family || 'Unknown'))), (v) => d3.sum(v, (r) => r.kg), (r) => r.d);
+    const tr = d3.rollup(E.dtrips.filter((r) => r.year >= f.y0 && r.year <= f.y1 && allowed.has(r.a)), (v) => d3.sum(v, (r) => r.trips), (r) => r.d);
+    // Group days into the chosen period; each period sits at its middle (15th of the month, July 1)
+    const key = (d) => { if (step === 'day') return d; const dt = new Date(T0 + d * DAY), y = dt.getUTCFullYear(); return step === 'year' ? Math.round((Date.UTC(y, 6, 1) - T0) / DAY) : Math.round((Date.UTC(y, dt.getUTCMonth(), 15) - T0) / DAY); };
+    const kgP = d3.rollup([...kg], (v) => d3.sum(v, ([, x]) => x), ([d]) => key(d));
+    const trP = d3.rollup([...tr], (v) => d3.sum(v, ([, x]) => x), ([d]) => key(d));
+    if (kind === 'landings') return [...kgP].filter(([, v]) => v > 0).sort((a, b) => a[0] - b[0]).map(([d, v]) => ({ d, y: v, kg: v }));
+    return [...kgP].filter(([d, v]) => v > 0 && trP.get(d) > 0).sort((a, b) => a[0] - b[0]).map(([d, v]) => ({ d, y: v / trP.get(d), kg: v, trips: trP.get(d) }));
+  };
+
+  const drawSmooth = (W, H, E, M, f, kind, step) => {
+    const pts = daily(E, M, f, kind, step);
+    if (pts.length < 3) return null;
+    const per = { day: ['day', 'days', 'Daily'], month: ['month', 'months', 'Monthly'], year: ['year', 'years', 'Yearly'] }[step];
+    const pLab = (d) => { const dt = new Date(T0 + d * DAY); return step === 'year' ? String(dt.getUTCFullYear()) : step === 'month' ? d3.utcFormat('%B %Y')(dt) : d3.utcFormat('%b %-d, %Y')(dt); };
+    const xs = pts.map((p) => p.d), ys = pts.map((p) => p.y);
+    const n = 160, x0 = xs[0], x1 = xs[xs.length - 1];
+    const grid = d3.range(n + 1).map((i) => x0 + (x1 - x0) * i / n);
+    const sm = pts.length >= 4 ? loess(xs, ys, 0.5, grid) : [];
+    const g = glm(xs, ys);
+    const unit = kind === 'landings' ? 'kg' : 'kg / trip';
+    const ymax = Math.max(d3.max(sm, (s) => s.hi) || 1, (step === 'day' ? d3.quantile(ys.slice().sort(d3.ascending), 0.98) : d3.max(ys)) || 0);
+    const y = d3.scaleLinear([0, ymax], [H - 26, 14]).nice();
+    const hidden = ys.filter((v) => v > y.domain()[1]).length;
+    const yTitle = kind === 'landings' ? 'Total Landings (kg)' : 'CPUE (kg/fisher/trip)';
+    const ticks = y.ticks(5);
+    const svg = d3.create('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`);
+    document.body.appendChild(svg.node());
+    let ml = 0; const meas = svg.append('g');
+    ticks.forEach((tk) => { const tx = meas.append('text').attr('font-size', 12).text(d3.format('~s')(tk)); ml = Math.max(ml, tx.node().getComputedTextLength()); });
+    meas.remove(); svg.node().remove();
+    ml = Math.ceil(ml) + 10 + 22;
+    const dt = (d) => new Date(T0 + d * DAY);
+    svg.append('text').attr('transform', `translate(14,${(14 + H - 26) / 2}) rotate(-90)`).attr('text-anchor', 'middle').attr('font-size', 12).attr('font-weight', 500).attr('fill', 'var(--color-fg)').text(yTitle);
+    const x = d3.scaleUtc([dt(x0), dt(x1)], [ml + 4, W - 12]);
+    svg.append('g').selectAll('line').data(ticks).join('line').attr('x1', ml).attr('x2', W - 6).attr('y1', (tk) => y(tk)).attr('y2', (tk) => y(tk)).attr('stroke', 'var(--cds-chart-grid)');
+    svg.append('g').selectAll('text').data(ticks).join('text').attr('x', ml - 8).attr('y', (tk) => y(tk)).attr('dy', '0.32em').attr('text-anchor', 'end').attr('font-size', 12).attr('fill', 'var(--color-fg-muted)').text((tk) => d3.format('~s')(tk));
+    const span = (x1 - x0) / 365;
+    const xt = x.ticks(Math.max(2, Math.min(span > 2 ? 8 : 6, Math.floor(W / 90))));
+    const xf = span > 2 ? d3.utcFormat('%Y') : d3.utcFormat('%b %Y');
+    svg.append('g').selectAll('text').data(xt).join('text').attr('x', (v) => x(v)).attr('y', H - 6).attr('text-anchor', 'middle').attr('font-size', 12).attr('fill', 'var(--color-fg-muted)').text(xf);
+    svg.append('line').attr('x1', ml).attr('x2', W - 6).attr('y1', y(0)).attr('y2', y(0)).attr('stroke', 'var(--cds-chart-axis)');
+    const col = g ? trendColor(g.trend) : dash.colors[kind === 'landings' ? 0 : 2];
+    const clipLo = (v) => Math.max(0, v);
+    const clipId = 'ffclip-' + kind;
+    svg.append('defs').append('clipPath').attr('id', clipId).append('rect').attr('x', ml).attr('y', y(y.domain()[1])).attr('width', W - ml).attr('height', y(0) - y(y.domain()[1]));
+    svg.append('g').attr('clip-path', `url(#${clipId})`).selectAll('circle').data(pts).join('circle').attr('cx', (p) => x(dt(p.d))).attr('cy', (p) => y(p.y)).attr('r', step === 'day' ? 2 : step === 'month' ? 3.5 : 5).attr('fill', col).attr('opacity', step === 'day' ? 0.3 : step === 'month' ? 0.55 : 0.85);
+    if (sm.length) svg.append('path').attr('d', d3.area().x((s) => x(dt(s.x))).y0((s) => y(clipLo(s.lo))).y1((s) => y(s.hi))(sm)).attr('fill', col).attr('opacity', 0.22);
+    if (sm.length) svg.append('path').attr('d', d3.line().x((s) => x(dt(s.x))).y((s) => y(s.fit))(sm)).attr('fill', 'none').attr('stroke', col).attr('stroke-width', 2).attr('stroke-linecap', 'round').attr('stroke-linejoin', 'round');
+    if (g) svg.append('text').attr('x', (ml + W) / 2).attr('y', H - 40).attr('text-anchor', 'middle').attr('font-size', 15).attr('fill', col).text(g.trend);
+    const dot = svg.append('circle').attr('r', 4).attr('fill', col).attr('opacity', 0);
+    svg.append('rect').attr('x', ml).attr('y', 0).attr('width', W - ml).attr('height', H - 20).attr('fill', 'transparent')
+      .on('mousemove', (e) => { const [px] = d3.pointer(e); const xd = (x.invert(px) - T0) / DAY; const pt = pts.reduce((a, b) => Math.abs(b.d - xd) < Math.abs(a.d - xd) ? b : a, pts[0]); dot.attr('cx', x(dt(pt.d))).attr('cy', y(Math.min(pt.y, y.domain()[1]))).attr('opacity', 1); const lines = [[null, kind === 'landings' ? 'Landings' : 'CPUE', d3.format(',.1f')(pt.y) + ' ' + unit]]; if (kind === 'cpue') lines.push([null, 'Catch', fmt.tTip(pt.kg)], [null, 'Trips', fmt.int(pt.trips)]); if (sm.length) { const s = sm.reduce((a, b) => Math.abs(b.x - pt.d) < Math.abs(a.x - pt.d) ? b : a, sm[0]); lines.push([null, 'Smoothed', `${d3.format(',.1f')(s.fit)} (${d3.format(',.1f')(clipLo(s.lo))}–${d3.format(',.1f')(s.hi)})`]); } tip.show(e, pLab(pt.d), lines); })
+      .on('mouseleave', () => { dot.attr('opacity', 0); tip.hide(); });
+    const sTrend = stat('Trend', g ? g.trend : '—'); sTrend.querySelector('b').style.color = g ? trendColor(g.trend) : '';
+    stats.replaceChildren(
+      sTrend,
+      stat(`${per[1][0].toUpperCase() + per[1].slice(1)} with ${kind === 'landings' ? 'landings' : 'trips'}`, fmt.int(pts.length)),
+      stat(kind === 'landings' ? 'Average per ' + per[0] : 'Average per trip', d3.format(',.1f')(kind === 'landings' ? d3.mean(ys) : d3.sum(pts, (p) => p.kg) / d3.sum(pts, (p) => p.trips)) + ' ' + unit),
+    );
+    const leg1 = document.createElement('span'); const i1 = document.createElement('i'); i1.className = 'ff-sw'; i1.style.background = col; leg1.append(i1, document.createTextNode('LOESS fit (span 0.5) with 95% band'));
+    const leg0 = document.createElement('span'); const i0 = document.createElement('i'); i0.className = 'ff-sw'; i0.style.background = col; i0.style.opacity = '0.4'; i0.style.borderRadius = '50%'; leg0.append(i0, document.createTextNode(`${per[2]} values${hidden ? ` (${fmt.int(hidden)} above ${d3.format('~s')(y.domain()[1])} ${unit} not shown)` : ''}`));
+    leg.replaceChildren(...(sm.length ? [leg0, leg1] : [leg0]));
+    method.textContent = (kind === 'landings'
+      ? `Each point is the total catch weight landed in one ${per[0]} for the filters. `
+      : `Each point is one ${per[0]}’s catch for the filters divided by the fishing trips in that ${per[0]} in the selected places (a trip is one fisher landing catch on one day); family and buying-unit filters narrow the catch only. `)
+      + (sm.length ? '' : 'With fewer than 4 points no LOESS line is drawn. ')
+      + `The line is a LOESS smooth (span 0.5, degree 2) with a 95% confidence band, like geom_smooth(method = "loess", span = 0.5). The trend is a Gaussian GLM of the ${per[2].toLowerCase()} value on date: Increased or Decreased when the slope’s p-value (adjusted with p.adjust; one group, so unchanged) is below 0.05, otherwise Stable. ` + (g ? `Result: slope ${g.b >= 0 ? '+' : ''}${d3.format(',.2f')(g.b * 365)} ${unit} per year (estimate ${d3.format('.4f')(g.b)} ${unit} per day, std. error ${d3.format('.4f')(g.se)}), t statistic ${d3.format('.2f')(g.t)}, adjusted p-value ${pFmt(g.padj)}, n = ${fmt.int(pts.length)} ${per[1]}, so the trend is ${g.trend}.` : 'Too few points to test a trend.');
+    return svg;
+  };
+
+  const drawPie = (S, W, H, M) => {
+    const tot = d3.rollups(S.rows, (v) => d3.sum(v, (r) => r.kg), (r) => r.b).sort((a, b) => b[1] - a[1]);
+    const top = tot.slice(0, 5), rest = d3.sum(tot.slice(5), (d) => d[1]);
+    const parts = [...top.map(([b, kg], i) => ({ k: b, kg, name: M.units.get(b).local || M.units.get(b).name, sci: M.units.get(b).name, color: dash.colors[i] }))];
+    if (rest > 0) parts.push({ k: 'others', kg: rest, name: 'Others', sci: `${fmt.int(tot.length - 5)} other species`, color: 'var(--cds-chart-muted)' });
+    const total = d3.sum(parts, (p) => p.kg);
+    const R = Math.min(W / 2 - 40, H / 2 - 24);
+    const svg = d3.create('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`);
+    const g = svg.append('g').attr('transform', `translate(${W / 2},${H / 2})`);
+    const arcs = d3.pie().sort(null).value((p) => p.kg)(parts);
+    const arc = d3.arc().innerRadius(0).outerRadius(R), lab = d3.arc().innerRadius(R * 0.62).outerRadius(R * 0.62), out = d3.arc().innerRadius(R + 16).outerRadius(R + 16);
+    const slices = g.selectAll('path').data(arcs).join('path').attr('d', arc).attr('fill', (a) => a.data.color).attr('stroke', 'var(--color-panel)').attr('stroke-width', 1.5)
+      .on('mousemove', (e, a) => { slices.attr('opacity', (b) => b === a ? 1 : 0.6); tip.show(e, a.data.name + (a.data.k !== 'others' ? ' · ' + a.data.sci : ''), [[a.data.color, 'Share', d3.format('.1%')(a.data.kg / total)], [null, 'Catch', fmt.tTip(a.data.kg)]]); })
+      .on('mouseleave', () => { slices.attr('opacity', 1); tip.hide(); });
+    g.selectAll('text').data(arcs).join('text').each(function (a) {
+      const share = a.data.kg / total, small = a.endAngle - a.startAngle < 0.35;
+      const [cx, cy] = (small ? out : lab).centroid(a);
+      d3.select(this).attr('x', cx).attr('y', cy).attr('dy', '0.35em').attr('text-anchor', small ? (cx >= 0 ? 'start' : 'end') : 'middle').attr('font-size', small ? 12 : 15).attr('font-weight', 500)
+        .attr('fill', small ? 'var(--color-fg)' : 'var(--color-bg)').attr('pointer-events', 'none').text(fmt.pct(share));
+    });
+    leg.replaceChildren(...parts.map((p) => { const s = document.createElement('span'); const i = document.createElement('i'); i.className = 'ff-sw'; i.style.background = p.color; s.append(i, document.createTextNode(p.k === 'others' ? `Others (${p.sci})` : `${p.name} (${p.sci})`)); return s; }));
+    stats.replaceChildren(stat('Species in selection', fmt.int(tot.length)), stat('Top 5 share of catch', fmt.pct(d3.sum(top, (d) => d[1]) / (total || 1))), stat('Largest', parts.length ? parts[0].name : '—'));
+    method.textContent = 'Share of catch weight for the whole selection. The 5 heaviest species are shown by local name (buying unit in brackets); all other species are grouped as Others.';
+    return svg;
+  };
+
+  const drawSize = (f, W, H, E, M, b) => {
+    const prm = E.params.get(b), u = M.units.get(b);
+    const ok = FF.areaOk(M, f); const allowed = new Set([...M.areas.values()].filter(ok).map((a) => a.id));
+    const rows = E.size.filter((r) => r.b === b && allowed.has(r.a) && r.year >= f.y0 && r.year <= f.y1);
+    const n = d3.sum(rows, (r) => r.fish);
+    if (!n || !prm) { stats.replaceChildren(); leg.replaceChildren(); method.textContent = 'No length estimates for this species in the selection.'; return null; }
+    const bw = Math.max(1, Math.round(prm.lmax / 40));
+    const bins = d3.rollup(rows, (v) => d3.sum(v, (r) => r.fish), (r) => Math.floor(r.len / bw) * bw);
+    const xmax = Math.ceil(Math.max(d3.max(rows, (r) => r.len) + 1, prm.lmega * 1.1) / bw) * bw;
+    const ser = d3.range(0, xmax, bw).map((l) => ({ l, fish: bins.get(l) || 0 }));
+    const y = d3.scaleLinear([0, d3.max(ser, (s) => s.fish) || 1], [H - 40, 22]).nice();
+    const ticks = y.ticks(5);
+    const svg = d3.create('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`);
+    document.body.appendChild(svg.node());
+    let ml = 0; const meas = svg.append('g');
+    ticks.forEach((tk) => { const tx = meas.append('text').attr('font-size', 12).text(d3.format('~s')(tk)); ml = Math.max(ml, tx.node().getComputedTextLength()); });
+    meas.remove(); svg.node().remove();
+    ml = Math.ceil(ml) + 10;
+    const x = d3.scaleLinear([0, xmax], [ml, W - 10]);
+    svg.append('g').selectAll('line').data(ticks).join('line').attr('x1', ml).attr('x2', W - 6).attr('y1', (tk) => y(tk)).attr('y2', (tk) => y(tk)).attr('stroke', 'var(--cds-chart-grid)');
+    svg.append('g').selectAll('text').data(ticks).join('text').attr('x', ml - 8).attr('y', (tk) => y(tk)).attr('dy', '0.32em').attr('text-anchor', 'end').attr('font-size', 12).attr('fill', 'var(--color-fg-muted)').text((tk) => d3.format('~s')(tk));
+    const xt = x.ticks(Math.max(3, Math.floor(W / 80)));
+    svg.append('g').selectAll('text').data(xt).join('text').attr('x', (v) => x(v)).attr('y', H - 22).attr('text-anchor', 'middle').attr('font-size', 12).attr('fill', 'var(--color-fg-muted)').text((v) => v);
+    svg.append('text').attr('x', (ml + W - 10) / 2).attr('y', H - 4).attr('text-anchor', 'middle').attr('font-size', 12).attr('fill', 'var(--color-fg-muted)').text('Estimated length (cm)');
+    svg.append('line').attr('x1', ml).attr('x2', W - 6).attr('y1', y(0)).attr('y2', y(0)).attr('stroke', 'var(--cds-chart-axis)');
+    const colOf = (l) => l + bw <= prm.lmat ? 'var(--cds-chart-status-critical)' : dash.colors[0];
+    const bars = svg.append('g').selectAll('rect').data(ser).join('rect').attr('x', (s) => x(s.l) + 0.5).attr('width', (s) => Math.max(1, x(s.l + bw) - x(s.l) - 1)).attr('y', (s) => y(s.fish)).attr('height', (s) => Math.max(0, y(0) - y(s.fish))).attr('rx', 2).attr('fill', (s) => colOf(s.l));
+    const refs = [['Lmat', prm.lmat, 'var(--cds-chart-status-critical)'], ['Lopt', prm.lopt, dash.colors[2]], ['Lmega', prm.lmega, dash.colors[3]]];
+    const rg = svg.append('g');
+    let lastX = -1e9, row = 0;
+    refs.forEach(([nm, v, c]) => {
+      rg.append('line').attr('x1', x(v)).attr('x2', x(v)).attr('y1', 18).attr('y2', y(0)).attr('stroke', c).attr('stroke-width', 2).attr('stroke-dasharray', '5 4');
+      const label = `${nm} ${d3.format('.1f')(v)}`;
+      const tx = rg.append('text').attr('x', x(v) + 4).attr('font-size', 12).attr('fill', c).text(label);
+      document.body.appendChild(svg.node()); const w = tx.node().getComputedTextLength(); svg.node().remove();
+      row = x(v) < lastX + 8 ? row + 1 : 0; lastX = x(v) + 4 + w;
+      if (x(v) + 4 + w > W - 4) tx.attr('x', x(v) - 4).attr('text-anchor', 'end');
+      tx.attr('y', 12 + row * 13);
+    });
+    svg.append('rect').attr('x', ml).attr('y', 0).attr('width', W - ml).attr('height', H - 30).attr('fill', 'transparent')
+      .on('mousemove', (e) => { const [px] = d3.pointer(e); const l = Math.floor(x.invert(px) / bw) * bw; const s = ser.find((d) => d.l === l); if (!s) return tip.hide(); bars.attr('opacity', (d) => d.l === l ? 1 : 0.5); tip.show(e, `${l}–${l + bw} cm`, [[null, 'Fish', fmt.int(s.fish)], [null, 'Share', d3.format('.1%')(s.fish / n)]]); })
+      .on('mouseleave', () => { bars.attr('opacity', 1); tip.hide(); });
+    const share = (test) => d3.sum(rows.filter((r) => test(r.len + 0.5)), (r) => r.fish) / n;
+    const mean = d3.sum(rows, (r) => (r.len + 0.5) * r.fish) / n;
+    stats.replaceChildren(
+      stat('Fish measured (estimated)', fmt.int(n)),
+      stat('Mean length', d3.format('.1f')(mean) + ' cm'),
+      stat('Mature (≥ Lmat)', d3.format('.0%')(share((l) => l >= prm.lmat))),
+      stat('At or above Lopt (≥ Lopt)', d3.format('.0%')(share((l) => l >= prm.lopt))),
+      stat('Mega-spawners (> Lmega)', d3.format('.0%')(share((l) => l > prm.lmega))),
+    );
+    leg.replaceChildren(...[['Below Lmat (immature)', 'var(--cds-chart-status-critical)'], ['At or above Lmat', dash.colors[0]]].map(([nm, c]) => { const s = document.createElement('span'); const i = document.createElement('i'); i.className = 'ff-sw'; i.style.background = c; s.append(i, document.createTextNode(nm)); return s; }));
+    method.textContent = `${u.name} (${u.local}). Length is estimated per catch record from mean fish weight (total weight ÷ fish count) with W = a·L^b, a = ${prm.a}, b = ${prm.bb}; every fish in a record gets that mean length. Reference lengths from Lmax ${prm.lmax} cm: L∞ via Froese & Binohlan (2000), Lmat and Lopt from L∞ by the same authors' empirical equations, Lmega = 1.1 × Lopt (Froese 2004). Bars are ${bw} cm wide. Only records sold by weight with a fish count are used.`;
+    return svg;
+  };
+
+  dash.onData(() => {
+    const p = dash.params(), ind = p.ind || 'landings', step = ['day', 'month', 'year'].includes(p.step) ? p.step : 'day';
+    document.querySelectorAll('#ind-toggle .ff-btn').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.i === ind)));
+    document.querySelectorAll('#ind-step .ff-btn').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.s === step)));
+    stepWrap.hidden = !(ind === 'landings' || ind === 'cpue');
+    spWrap.hidden = ind !== 'size';
+    const st = FF.statusOf('catch_cube', 'areas', 'buying_units', 'gears', 'size_bins', 'species_params', 'daily_catch', 'daily_trips');
+    if (st === 'error') { stats.replaceChildren(); leg.replaceChildren(); method.textContent = ''; return FF.fail(box); }
+    if (st !== 'ok') { box.replaceChildren(); box.classList.add('dash-skeleton'); return; }
+    box.classList.remove('dash-skeleton');
+    const S = FF.selected(), M = FF.model(), E = extra(), f = S.f;
+    const W = Math.max(280, box.clientWidth), H = 340;
+    const ok = FF.areaOk(M, f); const allowed = new Set([...M.areas.values()].filter(ok).map((a) => a.id));
+    const us = new Set(f.units), fs = new Set(f.fams);
+    const fishBy = d3.rollup(E.size.filter((r) => allowed.has(r.a) && r.year >= f.y0 && r.year <= f.y1), (v) => d3.sum(v, (r) => r.fish), (r) => r.b);
+    const MIN_FISH = 100;
+    const spAll = [...fishBy.keys()].filter((b) => E.params.has(b) && M.units.has(b) && (!us.size || us.has(b)) && (!fs.size || fs.has(M.units.get(b).family)));
+    const spOpts = spAll.filter((b) => fishBy.get(b) >= MIN_FISH).sort((a, b) => M.units.get(a).name.localeCompare(M.units.get(b).name));
+    const spSkipped = spAll.length - spOpts.length;
+    let chosen = p.sizeSp && spOpts.includes(String(p.sizeSp)) ? String(p.sizeSp) : null;
+    if (!chosen && spOpts.length) chosen = spOpts.reduce((a, b) => (fishBy.get(b) > fishBy.get(a) ? b : a), spOpts[0]);
+    sp.replaceChildren(...spOpts.map((b) => { const u = M.units.get(b); return new Option(`${u.name} — ${u.local} (${fmt.int(fishBy.get(b))} fish)`, b); }));
+    if (chosen) sp.value = chosen;
+    let svg = null;
+    if (ind === 'size') {
+      svg = chosen ? drawSize(f, W, H, E, M, chosen) : null;
+      if (svg && spSkipped) method.textContent += ` ${fmt.int(spSkipped)} species with fewer than ${MIN_FISH} fish in this selection are not analysed and are left out of the list.`;
+      if (!chosen) { stats.replaceChildren(); leg.replaceChildren(); method.textContent = spAll.length ? `No species has at least ${MIN_FISH} fish with length estimates in this selection, so size structure is not analysed. Widen the places, years, families or buying units.` : 'No species in the selection has length estimates.'; return FF.empty(box); }
+    }
+    else if (!S.rows.length) { stats.replaceChildren(); leg.replaceChildren(); method.textContent = ''; return FF.empty(box); }
+    else if (ind === 'cpue') svg = drawSmooth(W, H, E, M, f, 'cpue', step);
+    else if (ind === 'comp') svg = drawPie(S, W, H, M);
+    else svg = drawSmooth(W, H, E, M, f, 'landings', step);
+    if (!svg) { stats.replaceChildren(); leg.replaceChildren(); method.textContent = ind === 'size' ? 'No species in the selection has length estimates.' : 'Too few days with records in the selection to fit a trend.'; return FF.empty(box); }
+    svg.attr('role', 'img').attr('aria-label', document.querySelector(`#ind-toggle [data-i="${ind}"]`).textContent);
+    box.replaceChildren(svg.node());
+  });
+})();
+</script>
+
+<script>
+(() => {
+  const btn = document.getElementById('ind-export'), wrap = document.getElementById('ind-export-wrap');
+  let downloads = null;
+  claude.use('downloads').then((d) => { downloads = d; wrap.hidden = !d; }).catch(() => { wrap.hidden = true; });
+  const slug = (s) => s.replace(/[^\p{L}\p{N}]+/gu, '_').replace(/^_+|_+$/g, '');
+  const place = () => {
+    const f = FF.P(), M = FF.model();
+    const one = (list, name) => list.length === 1 ? name(list[0]) : list.length ? `${list.length} ${list === f.provs ? 'provinces' : list === f.dists ? 'districts' : 'areas'}` : null;
+    return one(f.areas, (a) => M.areas.get(a)?.name) || one(f.dists, (d) => d.split('|')[1]) || one(f.provs, (x) => x) || 'All provinces';
+  };
+  // Copy the colors and type the page resolved onto each element, so the picture stands alone
+  const inline = (src, dst) => {
+    const cs = getComputedStyle(src);
+    for (const k of ['fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'opacity', 'fill-opacity', 'font-family', 'font-size', 'font-weight']) dst.style.setProperty(k, cs.getPropertyValue(k));
+    for (let i = 0; i < src.children.length; i++) inline(src.children[i], dst.children[i]);
+  };
+  const wrapText = (ctx, text, maxW) => { const words = text.split(' '), lines = []; let cur = ''; for (const w of words) { const n = cur ? cur + ' ' + w : w; if (ctx.measureText(n).width > maxW && cur) { lines.push(cur); cur = w; } else cur = n; } if (cur) lines.push(cur); return lines; };
+  const busy = (on, label) => { btn.disabled = on; btn.textContent = label || 'Download PNG'; };
+  btn.addEventListener('click', async () => {
+    const svg = document.querySelector('#ind-chart svg');
+    if (!svg || !downloads) return;
+    busy(true, 'Preparing…');
+    try {
+      const root = getComputedStyle(document.getElementById('indicators'));
+      const bg = root.getPropertyValue('background-color') || '#fff', fg = root.getPropertyValue('color') || '#000';
+      const muted = getComputedStyle(document.querySelector('#indicators .ff-note')).color;
+      const font = getComputedStyle(document.querySelector('#indicators h2')).fontFamily;
+      const vb = svg.viewBox.baseVal, W = vb.width, H = vb.height;
+      const clone = svg.cloneNode(true); inline(svg, clone);
+      clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg'); clone.setAttribute('width', W); clone.setAttribute('height', H);
+      clone.querySelectorAll('rect').forEach((r) => { if (r.style.fill === 'transparent' || r.getAttribute('fill') === 'transparent') r.remove(); });
+      const img = new Image();
+      await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(clone)); });
+      const ind = document.querySelector('#ind-toggle [aria-pressed="true"]')?.textContent || 'Indicator';
+      const f = FF.P(), where = place();
+      const title = `${ind} — ${where}`;
+      const subtitle = `${f.y0 === f.y1 ? f.y0 : f.y0 + '–' + f.y1}${f.fams.length ? ' · ' + (f.fams.length === 1 ? f.fams[0] : f.fams.length + ' families') : ''}${f.units.length ? ' · ' + (f.units.length === 1 ? FF.model().units.get(f.units[0])?.name : f.units.length + ' buying units') : ''}${ind === 'Size structure' ? ' · ' + (document.getElementById('ind-sp').selectedOptions[0]?.textContent || '') : ''}${(ind === 'Total landings' || ind === 'CPUE') ? ' · ' + (document.querySelector('#ind-step [aria-pressed="true"]')?.textContent || '') + ' points' : ''}`;
+      const legend = [...document.querySelectorAll('#ind-legend span')].map((s) => ({ color: getComputedStyle(s.querySelector('i')).backgroundColor, text: s.textContent }));
+      const stats = [...document.querySelectorAll('#ind-stats .ff-ind-stat')].map((s) => `${s.querySelector('span').textContent}: ${s.querySelector('b').textContent}`).join('   ·   ');
+      const note = document.getElementById('ind-method').textContent + ` Source: Rare Fish Forever catch data (data.rare.org), updated ${window.FF_UPDATED || ''}.`;
+      const scale = 2, pad = 28, Wc = Math.max(W, 640) + pad * 2;
+      const c = document.createElement('canvas'), ctx = c.getContext('2d');
+      ctx.font = `13px ${font}`;
+      const legLines = []; { let cur = [], w = 0; for (const l of legend) { const lw = ctx.measureText(l.text).width + 30; if (w + lw > Wc - pad * 2 && cur.length) { legLines.push(cur); cur = []; w = 0; } cur.push(l); w += lw; } if (cur.length) legLines.push(cur); }
+      ctx.font = `12px ${font}`;
+      const noteLines = wrapText(ctx, note, Wc - pad * 2), statLines = stats ? wrapText(ctx, stats, Wc - pad * 2) : [];
+      const Hc = pad + 26 + 20 + statLines.length * 17 + 10 + legLines.length * 20 + 8 + H + 14 + noteLines.length * 16 + pad;
+      c.width = Wc * scale; c.height = Hc * scale; ctx.scale(scale, scale);
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, Wc, Hc);
+      let y = pad;
+      ctx.fillStyle = fg; ctx.font = `600 20px ${font}`; ctx.textBaseline = 'top'; ctx.fillText(title, pad, y); y += 28;
+      ctx.fillStyle = muted; ctx.font = `13px ${font}`; ctx.fillText(subtitle, pad, y); y += 20;
+      ctx.font = `12px ${font}`; ctx.fillStyle = fg; statLines.forEach((l) => { ctx.fillText(l, pad, y); y += 17; }); y += 10;
+      ctx.font = `13px ${font}`;
+      legLines.forEach((line) => { let x = pad; line.forEach((l) => { ctx.fillStyle = l.color; ctx.fillRect(x, y + 3, 10, 10); ctx.fillStyle = muted; ctx.fillText(l.text, x + 16, y); x += ctx.measureText(l.text).width + 30; }); y += 20; });
+      y += 8;
+      ctx.drawImage(img, (Wc - W) / 2, y, W, H); y += H + 14;
+      ctx.fillStyle = muted; ctx.font = `12px ${font}`; noteLines.forEach((l) => { ctx.fillText(l, pad, y); y += 16; });
+      const blob = await new Promise((res) => c.toBlob(res, 'image/png'));
+      const filename = `${slug(ind)}_${slug(where)}_${f.y0 === f.y1 ? f.y0 : f.y0 + '-' + f.y1}.png`;
+      await downloads.save({ filename, data: blob });
+      busy(false);
+    } catch (e) {
+      const code = e && e.code;
+      if (code === 'unavailable' || code === 'not_granted' || code === 'capability_disabled' || code === 'capability_removed') wrap.hidden = true;
+      busy(false, code === 'declined' || !code ? 'Download PNG' : code === 'rate_limited' ? 'Try again in a moment' : 'Couldn’t export');
+      if (code && code !== 'declined') setTimeout(() => busy(false), 2500);
+    }
+  });
+})();
+</script>
+
+</div>
+</body>
+</html>
