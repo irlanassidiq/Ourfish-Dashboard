@@ -270,7 +270,7 @@ html, body { margin: 0; background: var(--color-bg); color: var(--color-fg); fon
       <table class="ff-table"><thead><tr>
         <th><button data-k="name">Buying unit</button></th>
         <th class="ff-hide-narrow"><button data-k="family">Family</button></th>
-        <th class="num"><button data-k="kg">Catch (t)</button></th>
+        <th class="num"><button data-k="kg">Catch (kg)</button></th>
         <th class="num"><button data-k="idr">Value (IDR)</button></th>
         <th class="num ff-hide-narrow"><button data-k="price">IDR / kg</button></th>
         <th class="num ff-hide-narrow"><button data-k="n">Records</button></th>
@@ -287,7 +287,7 @@ html, body { margin: 0; background: var(--color-bg); color: var(--color-fg); fon
       <table class="ff-table"><thead><tr>
         <th><button data-k="name">District</button></th>
         <th class="ff-hide-narrow"><button data-k="province">Province</button></th>
-        <th class="num"><button data-k="kg">Catch (t)</button></th>
+        <th class="num"><button data-k="kg">Catch (kg)</button></th>
         <th class="num"><button data-k="idr">Value (IDR)</button></th>
         <th class="num ff-hide-narrow"><button data-k="price">IDR / kg</button></th>
         <th class="num ff-hide-narrow"><button data-k="n">Records</button></th>
@@ -304,7 +304,7 @@ html, body { margin: 0; background: var(--color-bg); color: var(--color-fg); fon
       <table class="ff-table"><thead><tr>
         <th><button data-k="name">Area</button></th>
         <th class="ff-hide-narrow"><button data-k="district">District</button></th>
-        <th class="num"><button data-k="kg">Catch (t)</button></th>
+        <th class="num"><button data-k="kg">Catch (kg)</button></th>
         <th class="num"><button data-k="idr">Value (IDR)</button></th>
         <th class="num ff-hide-narrow"><button data-k="n">Records</button></th>
         <th class="num ff-hide-narrow"><button data-k="fishers">Fishers</button></th>
@@ -325,9 +325,9 @@ window.FF = (() => {
   const compact = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
   const fmt = {
     int: d3.format(','),
-    t: (kg) => kg / 1000 >= 100 ? d3.format(',.0f')(kg / 1000) : d3.format(',.1f')(kg / 1000),
-    tUnit: (kg) => d3.format(',.0f')(kg / 1000) + ' t',
-    tTip: (kg) => d3.format(',.1f')(kg / 1000) + ' t',
+    t: (kg) => d3.format(',.0f')(kg),
+    tUnit: (kg) => d3.format(',.0f')(kg) + ' kg',
+    tTip: (kg) => d3.format(',.0f')(kg) + ' kg',
     idr: (v) => 'Rp ' + (v >= 10000 ? compact.format(v) : d3.format(',.0f')(v)),
     idrFull: (v) => 'Rp ' + d3.format(',.0f')(v),
     perKg: (v) => 'Rp ' + d3.format(',.0f')(v),
@@ -555,7 +555,7 @@ window.FF = (() => {
   const tip = FF.tip(card);
   const names = { kg: 'Catch', idr: 'Value', n: 'Records' };
   const f1 = { kg: fmt.tTip, idr: fmt.idrFull, n: fmt.int };
-  const axisF = { kg: (v) => d3.format('~s')(v / 1000) + ' t', idr: (v) => 'Rp ' + d3.format('~s')(v).replace('G', 'B'), n: d3.format('~s') };
+  const axisF = { kg: (v) => d3.format('~s')(v) + ' kg', idr: (v) => 'Rp ' + d3.format('~s')(v).replace('G', 'B'), n: d3.format('~s') };
   dash.onData(() => {
     const st = FF.statusOf('catch_cube', 'areas', 'buying_units', 'gears');
     if (st === 'error') return FF.fail(box);
