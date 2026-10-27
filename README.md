@@ -6,13 +6,13 @@ folder on any web host.
 
 ```
 index.html                     the dashboard
-lib/d3.min.js                  charting library (d3 v7.9.0), included so it works offline
-data/data.js                   the aggregated data the dashboard reads
-R/build_data.R                 downloads the latest data and rebuilds data/data.js
+d3.min.js                      charting library (d3 v7.9.0), included so it works offline
+data.js                        the aggregated data the dashboard reads
+build_data.R                   downloads the latest data and rebuilds data.js
 .github/workflows/refresh.yml  GitHub: refreshes the data every night and publishes the site
 ```
 
-`data/data.js` holds totals only (per month, day, place, buying unit and gear), plus
+`data.js` holds totals only (per month, day, place, buying unit and gear), plus
 fish counts per length class and trip counts. No fisher or buyer names or IDs are
 written, so it is safe to publish. Your API key is never written to any file here.
 
@@ -29,7 +29,7 @@ written, so it is safe to publish. Your API key is never written to any file her
    When it finishes, your site is at `https://<your-user>.github.io/<repository>/`.
 
 From then on it runs every day at 03:00 WIB. It downloads the dataset, rebuilds
-`data/data.js`, and republishes the site only when there are new records. You can
+`data.js`, and republishes the site only when there are new records. You can
 press **Run workflow** any time for an immediate update.
 
 ## Option B — your own server or computer
@@ -38,13 +38,13 @@ Requires R with the `data.table` and `jsonlite` packages.
 
 ```bash
 cd fish-forever-dashboard
-RARE_API_KEY=your_key Rscript R/build_data.R
+RARE_API_KEY=your_key Rscript build_data.R
 ```
 
 On Windows (PowerShell):
 
 ```powershell
-$env:RARE_API_KEY = "your_key"; Rscript R/build_data.R
+$env:RARE_API_KEY = "your_key"; Rscript build_data.R
 ```
 
 Then copy the folder to your web server, or open `index.html` directly. To keep it

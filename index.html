@@ -38,8 +38,8 @@ html, body { margin: 0; background: var(--color-bg); color: var(--color-fg); fon
 </style>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600&family=Source+Serif+4:opsz,wght@8..60,400&display=swap">
-<script src="lib/d3.min.js"></script>
-<script src="data/data.js"></script>
+<script src="d3.min.js"></script>
+<script src="data.js"></script>
 <script>
 // Stands in for the Claude dashboard runtime: serves the tables in data/data.js,
 // keeps the filter state in the page and redraws on every change.
@@ -89,7 +89,7 @@ html, body { margin: 0; background: var(--color-bg); color: var(--color-fg); fon
     if (g) g.textContent = window.FF_UPDATED || 'unknown';
     if (l) l.textContent = last ? fmtDate(last + 'T00:00:00Z') : 'unknown';
     if (n && last) n.textContent += ` Data runs to ${fmtDate(last + 'T00:00:00Z')}.`;
-    if (!window.FF_DATA) document.getElementById('dash-root').insertAdjacentHTML('afterbegin', '<p class="ff-missing">The data file data/data.js didn’t load. Run R/build_data.R to create it, then reload.</p>');
+    if (!window.FF_DATA) document.getElementById('dash-root').insertAdjacentHTML('afterbegin', '<p class="ff-missing">The data file data.js didn’t load. Run build_data.R to create it, then reload.</p>');
   });
 })();
 </script>

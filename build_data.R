@@ -2,10 +2,10 @@
 #
 # Downloads the catch dataset from Rare's Data Manager (data.rare.org),
 # aggregates it into the tables the dashboard reads, and writes them to
-# data/data.js. Only totals are written: no fisher or buyer names or IDs.
+# data.js. Only totals are written: no fisher or buyer names or IDs.
 #
 # Run from the project folder:
-#   RARE_API_KEY=xxxx Rscript R/build_data.R
+#   RARE_API_KEY=xxxx Rscript build_data.R
 #
 # Environment variables
 #   RARE_API_KEY     your Data Manager API key (required; keep it secret)
@@ -21,7 +21,7 @@ dataset_id <- Sys.getenv("RARE_DATASET_ID")
 if (!nzchar(dataset_id)) dataset_id <- "91AmXtp0_5Gb0hD7"
 api_key    <- Sys.getenv("RARE_API_KEY", "")
 local_csv  <- Sys.getenv("RARE_CSV", "")
-out_file   <- file.path("data", "data.js")
+out_file   <- "data.js"
 base_year  <- 2019L   # the dashboard counts months and days from Jan 1, 2019
 outside    <- "Outside managed access areas"
 
@@ -129,7 +129,7 @@ s <- s[is.finite(L) & L > 0 & L <= lm * 1.5]
 size_bins <- s[, .(fish = sum(c)), by = .(b, a, year, len_cm = floor(L))]
 message("Length estimates from ", nrow(s), " records.")
 
-# ---- 3. Write data/data.js ---------------------------------------------------
+# ---- 3. Write data.js ---------------------------------------------------
 as_csv <- function(x) {
   tf <- tempfile(fileext = ".csv")
   fwrite(x, tf, na = "", scipen = 50)
@@ -151,7 +151,6 @@ payload <- list(
     daily_trips = as_csv(daily_trips)
   )
 )
-dir.create(dirname(out_file), showWarnings = FALSE, recursive = TRUE)
 # Leave the file alone when the data hasn't changed, so the site only redeploys on new records
 new_files <- toJSON(payload$files, auto_unbox = TRUE)
 if (file.exists(out_file)) {
