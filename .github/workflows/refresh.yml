@@ -21,6 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: r-lib/actions/setup-r@v2
         with:
@@ -46,7 +48,9 @@ jobs:
             echo "No new data."
           else
             git commit -m "Refresh data $(date -u +%Y-%m-%d)"
-            git push
+            # Take in any edits made on GitHub while this was running, then save
+            git pull --rebase -X theirs origin "${GITHUB_REF_NAME}"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
 
       - uses: actions/configure-pages@v5
