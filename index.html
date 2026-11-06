@@ -126,7 +126,7 @@ html, body { margin: 0; background: var(--color-bg); color: var(--color-fg); fon
 .ff-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)); gap: var(--cds-gap-md); }
 .ff-card { background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-lg); position: relative; min-width: 0; }
 .ff-kpi-label { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
-.ff-kpi-value { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); font-variant-numeric: tabular-nums; margin: var(--cds-gap-xs) 0; min-height: 1.3em; }
+.ff-kpi-value { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: clamp(20px, 2.1vw, 30px); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; margin: var(--cds-gap-xs) 0; min-height: 1.3em; }
 .ff-kpi-note { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
 .ff-card h2 { font-size: var(--cds-font-size-heading); font-weight: var(--cds-font-weight-medium); margin: 0; }
 .ff-note { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); margin: 2px 0 var(--cds-gap-md); }
@@ -332,7 +332,7 @@ window.FF = (() => {
     t: (kg) => d3.format(',.0f')(kg),
     tUnit: (kg) => d3.format(',.0f')(kg) + ' kg',
     tTip: (kg) => d3.format(',.0f')(kg) + ' kg',
-    idr: (v) => 'Rp ' + (v >= 10000 ? compact.format(v) : d3.format(',.0f')(v)),
+    idr: (v) => 'Rp ' + d3.format(',.0f')(v),
     idrFull: (v) => 'Rp ' + d3.format(',.0f')(v),
     perKg: (v) => 'Rp ' + d3.format(',.0f')(v),
     pct: d3.format('.0%'),
@@ -568,7 +568,7 @@ window.FF = (() => {
   const tip = FF.tip(card);
   const names = { kg: 'Catch', idr: 'Value', n: 'Records' };
   const f1 = { kg: fmt.tTip, idr: fmt.idrFull, n: fmt.int };
-  const axisF = { kg: (v) => d3.format('~s')(v) + ' kg', idr: (v) => 'Rp ' + d3.format('~s')(v).replace('G', 'B'), n: d3.format('~s') };
+  const axisF = { kg: (v) => d3.format('~s')(v) + ' kg', idr: (v) => 'Rp ' + d3.format(',.0f')(v), n: d3.format('~s') };
   dash.onData(() => {
     const st = FF.statusOf('catch_cube', 'areas', 'buying_units', 'gears');
     if (st === 'error') return FF.fail(box);
@@ -594,9 +594,12 @@ window.FF = (() => {
     svg.append('g').selectAll('line').data(ticks).join('line').attr('x1', ml).attr('x2', W - 6).attr('y1', (t) => y(t)).attr('y2', (t) => y(t)).attr('stroke', 'var(--cds-chart-grid)');
     svg.append('g').selectAll('text').data(ticks).join('text').attr('x', ml - 8).attr('y', (t) => y(t)).attr('dy', '0.32em').attr('text-anchor', 'end').attr('font-size', 12).attr('fill', 'var(--color-fg-muted)').text((t) => axisF[mk](t));
     const nYears = f.y1 - f.y0 + 1, step = nYears > 6 && W < 700 ? 2 : 1;
-    const xt = nYears === 1 ? all.filter((m, i) => i % (W < 500 ? 3 : 2) === 0) : all.filter((m) => m % 12 === 0 && (Math.floor(m / 12) + FF_BASE - f.y0) % step === 0);
-    svg.append('g').selectAll('text').data(xt).join('text').attr('x', (m) => x(m)).attr('y', H - 6).attr('font-size', 12).attr('fill', 'var(--color-fg-muted)')
-      .text((m) => nYears === 1 ? d3.utcFormat('%b')(mDate(m)) : String(FF_BASE + Math.floor(m / 12)));
+    // Month-year labels, every k months so they don't overlap
+    const kOpts = [1, 2, 3, 4, 6, 12, 24, 36, 60], room = Math.max(1, Math.floor((W - ml) / 78));
+    const k = kOpts.find((v) => all.length / v <= room) || 60;
+    const xt = all.filter((m) => k < 12 ? (m % 12) % k === 0 : m % 12 === 0 && (Math.floor(m / 12) % (k / 12) === 0));
+    svg.append('g').selectAll('text').data(xt).join('text').attr('x', (m) => x(m) + x.bandwidth() / 2).attr('y', H - 6).attr('text-anchor', 'middle').attr('font-size', 12).attr('fill', 'var(--color-fg-muted)')
+      .text((m) => d3.utcFormat('%b %Y')(mDate(m)));
     svg.append('line').attr('x1', ml).attr('x2', W - 6).attr('y1', y(0)).attr('y2', y(0)).attr('stroke', 'var(--cds-chart-axis)');
     const bars = svg.append('g').selectAll('rect').data(series).join('rect')
       .attr('x', (s) => x(s.m)).attr('width', Math.max(1, x.bandwidth())).attr('y', (s) => y(s.v)).attr('height', (s) => Math.max(0, y(0) - y(s.v)))
@@ -674,7 +677,7 @@ window.FF = (() => {
     const W = Math.max(280, box.clientWidth), H = 280;
     const y = d3.scaleLinear([0, d3.max(pts, (r) => r.p) || 1], [H - 26, 12]).nice();
     const ticks = y.ticks(5);
-    const tf = (v) => 'Rp ' + d3.format('~s')(v);
+    const tf = (v) => 'Rp ' + d3.format(',.0f')(v);
     const svg = d3.create('svg').attr('width', '100%').attr('viewBox', `0 0 ${W} ${H}`).attr('role', 'img').attr('aria-label', 'Average price per kg by family and year');
     document.body.appendChild(svg.node());
     let ml = 0; const meas = svg.append('g');
@@ -871,8 +874,10 @@ window.FF = (() => {
     svg.append('g').selectAll('line').data(ticks).join('line').attr('x1', ml).attr('x2', W - 6).attr('y1', (tk) => y(tk)).attr('y2', (tk) => y(tk)).attr('stroke', 'var(--cds-chart-grid)');
     svg.append('g').selectAll('text').data(ticks).join('text').attr('x', ml - 8).attr('y', (tk) => y(tk)).attr('dy', '0.32em').attr('text-anchor', 'end').attr('font-size', 12).attr('fill', 'var(--color-fg-muted)').text((tk) => d3.format('~s')(tk));
     const span = (x1 - x0) / 365;
-    const xt = x.ticks(Math.max(2, Math.min(span > 2 ? 8 : 6, Math.floor(W / 90))));
-    const xf = span > 2 ? d3.utcFormat('%Y') : d3.utcFormat('%b %Y');
+    const kOpts = [1, 2, 3, 4, 6, 12, 24, 36, 60], room = Math.max(2, Math.floor((W - ml) / 78)), nMonths = Math.max(1, span * 12);
+    const k = kOpts.find((v) => nMonths / v <= room) || 60;
+    const xt = x.ticks(d3.utcMonth.every(k)).filter((v) => k < 12 || v.getUTCMonth() === 0);
+    const xf = d3.utcFormat('%b %Y');
     svg.append('g').selectAll('text').data(xt).join('text').attr('x', (v) => x(v)).attr('y', H - 6).attr('text-anchor', 'middle').attr('font-size', 12).attr('fill', 'var(--color-fg-muted)').text(xf);
     svg.append('line').attr('x1', ml).attr('x2', W - 6).attr('y1', y(0)).attr('y2', y(0)).attr('stroke', 'var(--cds-chart-axis)');
     const col = g ? trendColor(g.trend) : dash.colors[kind === 'landings' ? 0 : 2];
@@ -1074,21 +1079,36 @@ window.FF = (() => {
       const title = `${ind} — ${where}`;
       const subtitle = `${FF_SOURCES.length > 1 ? ({ digital: 'Digital records', paper: 'Paper-based records', both: 'Digital + paper records' })[f.source] + ' · ' : ''}${f.y0 === f.y1 ? f.y0 : f.y0 + '–' + f.y1}${f.fams.length ? ' · ' + (f.fams.length === 1 ? f.fams[0] : f.fams.length + ' families') : ''}${f.units.length ? ' · ' + (f.units.length === 1 ? FF.model().units.get(f.units[0])?.name : f.units.length + ' buying units') : ''}${ind === 'Size structure' ? ' · ' + (document.getElementById('ind-sp').selectedOptions[0]?.textContent || '') : ''}${(ind === 'Total landings' || ind === 'CPUE') ? ' · ' + (document.querySelector('#ind-step [aria-pressed="true"]')?.textContent || '') + ' points' : ''}`;
       const legend = [...document.querySelectorAll('#ind-legend span')].map((s) => ({ color: getComputedStyle(s.querySelector('i')).backgroundColor, text: s.textContent }));
-      const stats = [...document.querySelectorAll('#ind-stats .ff-ind-stat')].map((s) => `${s.querySelector('span').textContent}: ${s.querySelector('b').textContent}`).join('   ·   ');
+      const stats = [...document.querySelectorAll('#ind-stats .ff-ind-stat')].map((s) => { const b = s.querySelector('b'); return { label: s.querySelector('span').textContent, value: b.textContent, color: getComputedStyle(b).color }; });
+      const statEl = document.querySelector('#ind-stats .ff-ind-stat');
+      const boxBorder = statEl ? getComputedStyle(statEl).borderTopColor : muted;
+      const serif = statEl ? getComputedStyle(statEl.querySelector('b')).fontFamily : font;
       const note = document.getElementById('ind-method').textContent + ` Source: Rare Fish Forever catch data (data.rare.org), updated ${window.FF_UPDATED || ''}.`;
       const scale = 2, pad = 28, Wc = Math.max(W, 640) + pad * 2;
       const c = document.createElement('canvas'), ctx = c.getContext('2d');
       ctx.font = `13px ${font}`;
       const legLines = []; { let cur = [], w = 0; for (const l of legend) { const lw = ctx.measureText(l.text).width + 30; if (w + lw > Wc - pad * 2 && cur.length) { legLines.push(cur); cur = []; w = 0; } cur.push(l); w += lw; } if (cur.length) legLines.push(cur); }
       ctx.font = `12px ${font}`;
-      const noteLines = wrapText(ctx, note, Wc - pad * 2), statLines = stats ? wrapText(ctx, stats, Wc - pad * 2) : [];
-      const Hc = pad + 26 + 20 + statLines.length * 17 + 10 + legLines.length * 20 + 8 + H + 14 + noteLines.length * 16 + pad;
+      const noteLines = wrapText(ctx, note, Wc - pad * 2);
+      // Boxes in rows, as on the dashboard
+      const gap = 10, avail = Wc - pad * 2, cols = stats.length ? Math.min(stats.length, Math.max(1, Math.floor((avail + gap) / (140 + gap)))) : 0;
+      const boxW = cols ? (avail - gap * (cols - 1)) / cols : 0, boxH = 58, boxRows = cols ? Math.ceil(stats.length / cols) : 0;
+      const boxesH = boxRows ? boxRows * boxH + (boxRows - 1) * gap + 14 : 0;
+      const Hc = pad + 26 + 20 + 6 + boxesH + legLines.length * 20 + 8 + H + 14 + noteLines.length * 16 + pad;
       c.width = Wc * scale; c.height = Hc * scale; ctx.scale(scale, scale);
       ctx.fillStyle = bg; ctx.fillRect(0, 0, Wc, Hc);
       let y = pad;
       ctx.fillStyle = fg; ctx.font = `600 20px ${font}`; ctx.textBaseline = 'top'; ctx.fillText(title, pad, y); y += 28;
       ctx.fillStyle = muted; ctx.font = `13px ${font}`; ctx.fillText(subtitle, pad, y); y += 20;
-      ctx.font = `12px ${font}`; ctx.fillStyle = fg; statLines.forEach((l) => { ctx.fillText(l, pad, y); y += 17; }); y += 10;
+      y += 6;
+      const rr = (x0, y0, w, h, r) => { ctx.beginPath(); ctx.moveTo(x0 + r, y0); ctx.arcTo(x0 + w, y0, x0 + w, y0 + h, r); ctx.arcTo(x0 + w, y0 + h, x0, y0 + h, r); ctx.arcTo(x0, y0 + h, x0, y0, r); ctx.arcTo(x0, y0, x0 + w, y0, r); ctx.closePath(); };
+      stats.forEach((s, i) => {
+        const bx = pad + (i % cols) * (boxW + gap), by = y + Math.floor(i / cols) * (boxH + gap);
+        rr(bx + 0.5, by + 0.5, boxW - 1, boxH - 1, 8); ctx.strokeStyle = boxBorder; ctx.lineWidth = 1; ctx.stroke();
+        ctx.fillStyle = muted; ctx.font = `13px ${font}`; ctx.fillText(s.label, bx + 12, by + 10, boxW - 24);
+        ctx.fillStyle = s.color; ctx.font = `17px ${serif}`; ctx.fillText(s.value, bx + 12, by + 30, boxW - 24);
+      });
+      y += boxesH;
       ctx.font = `13px ${font}`;
       legLines.forEach((line) => { let x = pad; line.forEach((l) => { ctx.fillStyle = l.color; ctx.fillRect(x, y + 3, 10, 10); ctx.fillStyle = muted; ctx.fillText(l.text, x + 16, y); x += ctx.measureText(l.text).width + 30; }); y += 20; });
       y += 8;
