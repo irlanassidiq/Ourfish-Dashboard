@@ -40,6 +40,7 @@ html, body { margin: 0; background: var(--color-bg); color: var(--color-fg); fon
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600&family=Source+Serif+4:opsz,wght@8..60,400&display=swap">
 <script src="d3.min.js"></script>
 <script src="data.js"></script>
+<script src="reef.js"></script>
 <script>
 // Stands in for the Claude dashboard runtime: serves the tables in data/data.js,
 // keeps the filter state in the page and redraws on every change.
@@ -64,7 +65,7 @@ html, body { margin: 0; background: var(--color-bg); color: var(--color-fg); fon
   const SRC = (src.sources && src.sources.length) ? src.sources : ['digital'];
   window.FF_SOURCES = SRC;
   const years = (tables.catch_cube?.data || []).map((r) => FF_BASE + Math.floor(Number(r.m) / 12));
-  const defaults = { provinces: [], districts: [], areas: [], families: [], units: [], y0: years.length ? Math.min(...years) : FF_BASE, y1: years.length ? Math.max(...years) : FF_BASE, source: SRC.includes('digital') ? 'digital' : SRC[0], metric: 'kg', ind: 'landings', step: 'day', sizeSp: null };
+  const defaults = { provinces: [], districts: [], areas: [], families: [], units: [], y0: years.length ? Math.min(...years) : FF_BASE, y1: years.length ? Math.max(...years) : FF_BASE, source: SRC.includes('digital') ? 'digital' : SRC[0], metric: 'kg', ind: 'landings', step: 'day', sizeSp: null, view: 'catch', rds: 'fish', rmet: 'bio', rcat: 'total', rval: '', rx: ['area'], rmar: 'split', rsurvey: [], rprov: [], rarea: [], ryear: [] };
   // Filters can come from the address (#y0=2024&ind=cpue …) so a view can be shared as a link
   const fromHash = () => { try { const h = new URLSearchParams(location.hash.slice(1)); const o = {}; for (const [k, v] of h) { if (!(k in defaults)) continue; o[k] = Array.isArray(defaults[k]) ? (v ? v.split('~') : []) : (typeof defaults[k] === 'number' ? Number(v) : v || null); } return o; } catch (e) { return {}; } };
   let params = { ...defaults, ...fromHash() };
@@ -180,15 +181,22 @@ html, body { margin: 0; background: var(--color-bg); color: var(--color-fg); fon
 .ff-ind-stat span { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
 .ff-ind-chart { min-height: 320px; }
 .ff-ind-method { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); margin: var(--cds-gap-sm) 0 0; line-height: 1.5; }
+.ff[hidden], .ff [hidden] { display: none !important; }
+.ff-reef-scroll { overflow-x: auto; }
+.ff-btn.ff-primary { background: #1565c0; color: #fff; border-color: #1565c0; }
+.ff-view-toggle { margin-top: var(--cds-gap-sm); }
+.ff-view-toggle .ff-btn { font-size: var(--cds-font-size-body); }
 </style>
 
 <div class="ff">
   <header class="ff-head" id="overview">
-    <h1>Fish Forever catch dashboard — Indonesia</h1>
+    <h1>Fish Forever dashboard — Indonesia</h1>
+    <div class="ff-seg ff-view-toggle" id="view-toggle" role="group" aria-label="Dashboard view"><button class="ff-btn" type="button" data-v="catch">Catch monitoring</button><button class="ff-btn" type="button" data-v="reef">Reef surveys</button></div>
     <p class="ff-take dash-skeleton" id="takeaway" data-source="catch_cube areas buying_units">—</p>
     <p class="ff-sub dash-skeleton" id="snapshot" data-source="summary">—</p>
   </header>
 
+  <div class="ff" id="view-catch">
   <div class="ff-controls" id="filters">
     <label class="ff-field" id="src-wrap">Data source<select class="ff-src" aria-label="Data source"><option value="digital">Digital (Data Manager)</option><option value="paper">Paper-based (Google Sheet)</option><option value="both">Both</option></select></label>
     <div class="ff-field" id="ms-prov" data-source="areas">Provinces</div>
@@ -320,6 +328,81 @@ html, body { margin: 0; background: var(--color-bg); color: var(--color-fg); fon
     <p>Sources: Rare Fish Forever catch monitoring data (data.rare.org) and the paper-based catch recording sheet for Indonesia, updated <span id="ff-generated">—</span> (latest catch record <span id="ff-latest">—</span>). Values are in Indonesian rupiah as recorded. Figures are totals of catch records as entered; a few very large records are kept as recorded.</p>
     <p>To protect privacy, this page holds only aggregated totals. No fisher or buyer names or IDs are included.</p>
   </footer>
+  </div>
+<div class="ff" id="view-reef" hidden>
+  <section class="ff-card" id="reef-intro">
+    <h2>Reef survey comparison</h2>
+    <p class="ff-note" style="margin-bottom:0">Build mean ± SE comparisons across sites, provinces, managed areas and years from the MERMAID reef surveys. Pick several X-axis dimensions to combine them (for example Managed area × Year). Transects are averaged within each site first, and the site is the replicate, for fish and benthic alike. When Site is on the X-axis, the transects within the site are the replicates. Choose MA and R pooled, or shown separately.</p>
+    <p class="ff-sub dash-skeleton" id="reef-snapshot" data-source="reef_su">—</p>
+  </section>
+
+  <div class="ff-controls" id="reef-filters">
+    <div class="ff-field" id="ms-rsurvey" data-source="reef_su">Surveys</div>
+    <div class="ff-field" id="ms-rprov" data-source="reef_su">Provinces</div>
+    <div class="ff-field" id="ms-rarea" data-source="reef_su">Managed areas</div>
+    <div class="ff-field" id="ms-ryear" data-source="reef_su">Years</div>
+    <button class="ff-btn" type="button" id="reef-reset-filters">Reset filters</button>
+  </div>
+
+  <section class="ff-card" id="reef-builder">
+    <div class="ff-ind-controls">
+      <div class="ff-field">Survey type<div class="ff-seg" id="rb-ds" role="group" aria-label="Survey type">
+        <button class="ff-btn" type="button" data-v="fish">Fish</button>
+        <button class="ff-btn" type="button" data-v="benthic">Benthic</button>
+      </div></div>
+      <div class="ff-field" id="rb-met-wrap">Measure<div class="ff-seg" id="rb-met" role="group" aria-label="Measure">
+        <button class="ff-btn" type="button" data-v="bio">Biomass</button>
+        <button class="ff-btn" type="button" data-v="den">Abundance</button>
+      </div></div>
+      <div class="ff-field" id="rb-pit-wrap" hidden>Method<div class="ff-seg"><button class="ff-btn" type="button" aria-pressed="true" disabled>PIT</button></div></div>
+      <label class="ff-field" id="rb-cat-wrap">Category<select id="rb-cat" data-source="reef_taxa">
+        <option value="total">Total (all fish)</option><option value="family">Family</option><option value="trophic">Trophic group</option><option value="functional">Functional group</option><option value="taxon">Species</option>
+      </select></label>
+      <label class="ff-field" id="rb-val-wrap">Which<select id="rb-val" data-source="reef_taxa reef_benthic_cats"></select></label>
+    </div>
+    <div class="ff-ind-controls" style="margin-bottom:0">
+      <div class="ff-field">X-axis (pick one or more, in order)<div class="ff-seg" id="rb-x" role="group" aria-label="X-axis dimensions">
+        <button class="ff-btn" type="button" data-v="site">Site</button>
+        <button class="ff-btn" type="button" data-v="year">Year</button>
+        <button class="ff-btn" type="button" data-v="province">Province</button>
+        <button class="ff-btn" type="button" data-v="area">Managed area</button>
+      </div></div>
+      <div class="ff-field">Management<div class="ff-seg" id="rb-mar" role="group" aria-label="Management">
+        <button class="ff-btn" type="button" data-v="pooled">MAR pooled</button>
+        <button class="ff-btn" type="button" data-v="split">MA vs R</button>
+      </div></div>
+      <div class="ff-field">&nbsp;<div class="ff-seg">
+        <button class="ff-btn ff-primary" type="button" id="rb-generate">Generate</button>
+        <button class="ff-btn" type="button" id="rb-reset">Reset</button>
+      </div></div>
+    </div>
+    <p class="ff-note" id="rb-dirty" hidden style="margin:8px 0 0">Settings changed. Click Generate to update the comparison.</p>
+  </section>
+
+  <section class="ff-card" id="reef-result">
+    <div class="ff-row-head">
+      <div><h2 id="reef-title">Comparison</h2><p class="ff-note" id="reef-subtitle">—</p></div>
+      <div class="ff-seg" id="reef-export-wrap" hidden>
+        <button class="ff-btn" type="button" id="reef-png">Download PNG</button>
+        <button class="ff-btn" type="button" id="reef-csv">Download CSV</button>
+      </div>
+    </div>
+    <div class="ff-legend" id="reef-legend" data-source="reef_su"></div>
+    <div class="ff-reef-scroll"><div class="ff-ind-chart dash-skeleton" id="reef-chart" data-source="reef_su reef_fish reef_taxa reef_benthic reef_benthic_cats"></div></div>
+    <div class="ff-tablebox" id="reef-table" data-source="reef_su reef_fish reef_benthic">
+      <table class="ff-table"><thead><tr>
+        <th><button data-k="label">Group</button></th>
+        <th class="ff-reef-mcol"><button data-k="mgmt">Management</button></th>
+        <th class="num"><button data-k="mean">Mean</button></th>
+        <th class="num"><button data-k="se">SE</button></th>
+        <th class="num"><button data-k="n">Replicates</button></th>
+        <th class="num ff-hide-narrow"><button data-k="tr">Transects</button></th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+    <p class="ff-ind-method" id="reef-method">—</p>
+  </section>
+</div>
+
 </div>
 
 <script>
@@ -469,6 +552,7 @@ window.FF = (() => {
     openers.push(api); return api;
   };
   document.addEventListener('click', (e) => openers.forEach((o) => { if (!o.host.contains(e.target)) o.close(); }));
+  FF.makeMS = make;
 
   const msProv = make(document.getElementById('ms-prov'), { all: 'All provinces', param: 'provinces' });
   const msDist = make(document.getElementById('ms-dist'), { all: 'All districts', param: 'districts' });
@@ -1124,6 +1208,285 @@ window.FF = (() => {
       busy(false, code === 'declined' || !code ? 'Download PNG' : code === 'rate_limited' ? 'Try again in a moment' : 'Couldn’t export');
       if (code && code !== 'declined') setTimeout(() => busy(false), 2500);
     }
+  });
+})();
+</script>
+
+<script>
+// Reef survey comparison: mean ± SE across sites, provinces, managed areas and years
+(() => {
+  const { fmt } = FF;
+  const $ = (id) => document.getElementById(id);
+  const MG = { MA: 'Managed access (MA)', R: 'Reserve (R)', C: 'Control' };
+  const MGC = { MA: dash.colors[0], R: dash.colors[1], C: 'var(--cds-chart-muted)', all: dash.colors[0] };
+  const DIM = { site: 'Site', year: 'Year', province: 'Province', area: 'Managed area' };
+  const IDS = ['reef_su', 'reef_fish', 'reef_taxa', 'reef_benthic', 'reef_benthic_cats'];
+  const DEF = { rds: 'fish', rmet: 'bio', rcat: 'total', rval: '', rx: ['area'], rmar: 'split' };
+
+  // ---- data, parsed once ----
+  let cache = null;
+  const model = () => {
+    const d = Object.fromEntries(IDS.map((i) => [i, dash.data(i)]));
+    if (IDS.some((i) => d[i].status !== 'ok')) return null;
+    if (cache && cache.src === d.reef_su.data && cache.f === d.reef_fish.data && cache.b === d.reef_benthic.data) return cache;
+    const su = d.reef_su.data.map((r) => ({ id: String(r.su), t: r.t, survey: r.survey, province: r.province, area: String(r.area).trim(), site: String(r.site).trim(), year: String(r.year), mgmt: r.mgmt }));
+    const taxa = new Map(d.reef_taxa.data.map((r) => [String(r.x), { taxon: r.taxon, family: r.family, trophic: r.trophic, functional: r.functional }]));
+    const fish = new Map();
+    for (const r of d.reef_fish.data) { const k = String(r.su); if (!fish.has(k)) fish.set(k, []); fish.get(k).push({ x: String(r.x), bio: Number(r.bio), den: Number(r.den) }); }
+    const cats = new Map(d.reef_benthic_cats.data.map((r) => [String(r.c), r.category]));
+    const ben = new Map();
+    for (const r of d.reef_benthic.data) { const k = String(r.su); if (!ben.has(k)) ben.set(k, new Map()); ben.get(k).set(String(r.c), Number(r.cover)); }
+    cache = { src: d.reef_su.data, f: d.reef_fish.data, b: d.reef_benthic.data, su, taxa, fish, cats, ben };
+    return cache;
+  };
+  const list = (v) => Array.isArray(v) ? v.map(String) : [];
+  const cfgOf = (p) => ({
+    rds: p.rds === 'benthic' ? 'benthic' : 'fish', rmet: p.rmet === 'den' ? 'den' : 'bio',
+    rcat: ['total', 'family', 'trophic', 'functional', 'taxon'].includes(p.rcat) ? p.rcat : 'total', rval: p.rval ? String(p.rval) : '',
+    rx: list(p.rx).filter((x) => DIM[x]).length ? list(p.rx).filter((x) => DIM[x]) : ['area'], rmar: p.rmar === 'pooled' ? 'pooled' : 'split',
+  });
+  const filtersOf = (p) => ({ surveys: list(p.rsurvey), provs: list(p.rprov), areas: list(p.rarea), years: list(p.ryear) });
+
+  // ---- view switch ----
+  const vCatch = $('view-catch'), vReef = $('view-reef');
+  document.querySelectorAll('#view-toggle .ff-btn').forEach((b) => b.addEventListener('click', () => dash.setParams({ view: b.dataset.v })));
+  dash.onData(() => {
+    const v = dash.params().view === 'reef' ? 'reef' : 'catch';
+    document.querySelectorAll('#view-toggle .ff-btn').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === v)));
+    vCatch.hidden = v !== 'catch'; vReef.hidden = v !== 'reef';
+    ['takeaway', 'snapshot'].forEach((id) => { const e = $(id); if (e) e.hidden = v !== 'catch'; });
+  });
+
+  // ---- filters ----
+  const ms = {
+    survey: FF.makeMS($('ms-rsurvey'), { all: 'All surveys', param: 'rsurvey' }),
+    prov: FF.makeMS($('ms-rprov'), { all: 'All provinces', param: 'rprov' }),
+    area: FF.makeMS($('ms-rarea'), { all: 'All managed areas', param: 'rarea' }),
+    year: FF.makeMS($('ms-ryear'), { all: 'All years', param: 'ryear' }),
+  };
+  $('reef-reset-filters').addEventListener('click', () => dash.setParams({ rsurvey: [], rprov: [], rarea: [], ryear: [] }));
+  dash.onData(() => {
+    const M = model(); if (!M) return;
+    const f = filtersOf(dash.params());
+    const inSurvey = M.su.filter((s) => !f.surveys.length || f.surveys.includes(s.survey));
+    const inProv = inSurvey.filter((s) => !f.provs.length || f.provs.includes(s.province));
+    const opt = (arr) => [...new Set(arr)].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).map((v) => ({ value: v, label: v }));
+    ms.survey.update(opt(M.su.map((s) => s.survey)), f.surveys);
+    ms.prov.update(opt(inSurvey.map((s) => s.province)), f.provs);
+    const areaOpts = [...d3.group(inProv, (s) => s.area)].map(([a, v]) => ({ value: a, label: a, sub: `${new Set(v.map((s) => s.site)).size} sites`, group: v[0].province })).sort((a, b) => a.group.localeCompare(b.group) || a.label.localeCompare(b.label));
+    const ok = new Set(areaOpts.map((o) => o.value)), keep = f.areas.filter((a) => ok.has(a));
+    if (keep.length !== f.areas.length) { dash.setParams({ rarea: keep }); return; }
+    ms.area.update(areaOpts, f.areas);
+    ms.year.update(opt(M.su.map((s) => s.year)), f.years);
+    const snap = $('reef-snapshot'); snap.classList.remove('dash-skeleton');
+    const sites = new Set(M.su.map((s) => s.survey + '|' + s.site)).size;
+    snap.textContent = `${fmt.int(M.su.filter((s) => s.t === 'f').length)} fish belt and ${fmt.int(M.su.filter((s) => s.t === 'b').length)} benthic PIT transects at ${fmt.int(sites)} sites from ${new Set(M.su.map((s) => s.survey)).size} MERMAID surveys (${[...new Set(M.su.map((s) => s.year))].sort().join(', ')}).`;
+  });
+
+  // ---- builder (a draft until Generate) ----
+  let draft = null, draftFrom = '';
+  const segSet = (id, v) => document.querySelectorAll(`#${id} .ff-btn`).forEach((b) => b.setAttribute('aria-pressed', String(Array.isArray(v) ? v.includes(b.dataset.v) : b.dataset.v === v)));
+  const valueOptions = (M, c) => {
+    if (c.rds === 'benthic') return [...M.cats.values()].sort().map((v) => ({ value: v, label: v }));
+    if (c.rcat === 'total') return [];
+    const s = new Set([...M.taxa.values()].map((t) => t[c.rcat]).filter((v) => v && v !== 'Unknown'));
+    return [...s].sort((a, b) => a.localeCompare(b)).map((v) => ({ value: v, label: v }));
+  };
+  const drawBuilder = () => {
+    const M = model(); const c = draft;
+    segSet('rb-ds', c.rds); segSet('rb-met', c.rmet); segSet('rb-mar', c.rmar);
+    document.querySelectorAll('#rb-x .ff-btn').forEach((b) => { const i = c.rx.indexOf(b.dataset.v); b.setAttribute('aria-pressed', String(i >= 0)); b.textContent = DIM[b.dataset.v] + (i >= 0 && c.rx.length > 1 ? ` (${i + 1})` : ''); });
+    $('rb-met-wrap').hidden = c.rds !== 'fish'; $('rb-cat-wrap').hidden = c.rds !== 'fish'; $('rb-pit-wrap').hidden = c.rds !== 'benthic';
+    $('rb-cat').value = c.rcat;
+    const vw = $('rb-val-wrap'), vs = $('rb-val');
+    if (!M) return;
+    const opts = valueOptions(M, c);
+    vw.hidden = !opts.length;
+    vw.firstChild.textContent = c.rds === 'benthic' ? 'Benthic category' : ({ family: 'Family', trophic: 'Trophic group', functional: 'Functional group', taxon: 'Species' })[c.rcat] || 'Which';
+    if (opts.length && !opts.some((o) => o.value === c.rval)) c.rval = c.rds === 'benthic' ? (opts.find((o) => o.value === 'Hard coral') || opts[0]).value : opts[0].value;
+    vs.replaceChildren(...opts.map((o) => new Option(o.label, o.value)));
+    if (opts.length) vs.value = c.rval;
+    $('rb-dirty').hidden = JSON.stringify(c) === JSON.stringify(cfgOf(dash.params()));
+  };
+  const edit = (o) => { Object.assign(draft, o); drawBuilder(); };
+  document.querySelectorAll('#rb-ds .ff-btn').forEach((b) => b.addEventListener('click', () => edit({ rds: b.dataset.v, rval: '' })));
+  document.querySelectorAll('#rb-met .ff-btn').forEach((b) => b.addEventListener('click', () => edit({ rmet: b.dataset.v })));
+  document.querySelectorAll('#rb-mar .ff-btn').forEach((b) => b.addEventListener('click', () => edit({ rmar: b.dataset.v })));
+  document.querySelectorAll('#rb-x .ff-btn').forEach((b) => b.addEventListener('click', () => { const v = b.dataset.v; const x = draft.rx.includes(v) ? draft.rx.filter((d) => d !== v) : [...draft.rx, v]; edit({ rx: x.length ? x : [v] }); }));
+  $('rb-cat').addEventListener('change', (e) => edit({ rcat: e.target.value, rval: '' }));
+  $('rb-val').addEventListener('change', (e) => edit({ rval: e.target.value }));
+  $('rb-generate').addEventListener('click', () => dash.setParams({ ...draft }));
+  $('rb-reset').addEventListener('click', () => { draft = { ...DEF, rx: [...DEF.rx] }; dash.setParams({ ...draft }); });
+  dash.onData(() => {
+    const p = dash.params(), applied = JSON.stringify(cfgOf(p));
+    if (!draft || draftFrom !== applied) { draft = cfgOf(p); draftFrom = applied; }
+    drawBuilder();
+  });
+
+  // ---- statistics ----
+  const meanSE = (vals) => { const n = vals.length, m = d3.mean(vals) ?? 0; const sd = n > 1 ? d3.deviation(vals) : 0; return { mean: m, se: n > 1 ? sd / Math.sqrt(n) : 0, n }; };
+  const compute = (M, c, f) => {
+    const t = c.rds === 'fish' ? 'f' : 'b';
+    let sus = M.su.filter((s) => s.t === t && (!f.surveys.length || f.surveys.includes(s.survey)) && (!f.provs.length || f.provs.includes(s.province)) && (!f.areas.length || f.areas.includes(s.area)) && (!f.years.length || f.years.includes(s.year)));
+    if (c.rmar === 'pooled') sus = sus.filter((s) => s.mgmt === 'MA' || s.mgmt === 'R');
+    let catId = null;
+    if (t === 'b') catId = [...M.cats].find(([, v]) => v === c.rval)?.[0];
+    const val = (s) => {
+      if (t === 'b') return M.ben.get(s.id)?.get(catId) ?? 0;
+      const rows = M.fish.get(s.id) || [];
+      let sum = 0;
+      for (const r of rows) { if (c.rcat !== 'total') { const tx = M.taxa.get(r.x); if (!tx || tx[c.rcat] !== c.rval) continue; } sum += r[c.rmet]; }
+      return sum;
+    };
+    const bySite = c.rx.includes('site');
+    const gkey = (s) => c.rx.map((d) => s[d]).join(' · ');
+    const mkey = (s) => c.rmar === 'split' ? s.mgmt : 'all';
+    const groups = new Map();
+    if (bySite) {
+      // Site on the axis: the transects within each site are the replicates
+      for (const s of sus) { const k = gkey(s) + '\u0000' + mkey(s); if (!groups.has(k)) groups.set(k, { label: gkey(s), mgmt: mkey(s), vals: [], tr: 0 }); const g = groups.get(k); g.vals.push(val(s)); g.tr++; }
+    } else {
+      // Transects averaged within each site (site-year), then sites are the replicates
+      const site = d3.group(sus, (s) => `${s.survey}|${s.site}|${s.year}`);
+      for (const [, arr] of site) {
+        const s = arr[0], k = gkey(s) + '\u0000' + mkey(s);
+        if (!groups.has(k)) groups.set(k, { label: gkey(s), mgmt: mkey(s), vals: [], tr: 0 });
+        const g = groups.get(k); g.vals.push(d3.mean(arr, val)); g.tr += arr.length;
+      }
+    }
+    const order = { MA: 0, R: 1, C: 2, all: 0 };
+    const rows = [...groups.values()].map((g) => ({ ...g, ...meanSE(g.vals) }))
+      .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }) || order[a.mgmt] - order[b.mgmt]);
+    return { rows, bySite, nSus: sus.length };
+  };
+  const unitOf = (c) => c.rds === 'benthic' ? '%' : c.rmet === 'bio' ? 'kg/ha' : 'ind/ha';
+  const measureName = (c) => c.rds === 'benthic' ? `${c.rval} cover` : `${c.rcat === 'total' ? 'Fish' : c.rval} ${c.rmet === 'bio' ? 'biomass' : 'abundance'}`;
+  const num = (v, c) => c.rds === 'benthic' ? d3.format(',.1f')(v) : d3.format(',.1f')(v);
+
+  // ---- chart, table, notes ----
+  const box = $('reef-chart'), card = $('reef-result'), tip = FF.tip(card), legend = $('reef-legend'), method = $('reef-method');
+  const tbl = $('reef-table').querySelector('table'), st = { key: null, dir: 1 };
+  let last = null;
+  const drawTable = () => {
+    const tb = tbl.querySelector('tbody'); FF.setSort(tbl, st);
+    document.querySelectorAll('.ff-reef-mcol').forEach((e) => { e.hidden = !last || last.c.rmar !== 'split'; });
+    if (!last) return tb.replaceChildren();
+    const rows = st.key ? last.res.rows.slice().sort(FF.cmp(st)) : last.res.rows;
+    const td = (v, cls, hide) => { const e = document.createElement('td'); if (cls) e.className = cls; e.textContent = v; if (hide) e.hidden = true; return e; };
+    tb.replaceChildren(...rows.map((r) => { const tr = document.createElement('tr'); tr.append(td(r.label), td(MG[r.mgmt] || '', 'ff-reef-mcol', last.c.rmar !== 'split'), td(num(r.mean, last.c), 'num'), td(r.n > 1 ? num(r.se, last.c) : '—', 'num'), td(`${fmt.int(r.n)} ${last.res.bySite ? 'transects' : 'sites'}`, 'num'), td(fmt.int(r.tr), 'num ff-hide-narrow')); return tr; }));
+  };
+  FF.sortTable(tbl, st, drawTable);
+
+  dash.onData(() => {
+    const st0 = FF.statusOf(...IDS);
+    if (st0 === 'error') return FF.fail(box);
+    if (st0 !== 'ok') { box.replaceChildren(); box.classList.add('dash-skeleton'); return; }
+    box.classList.remove('dash-skeleton');
+    if ($('view-reef').hidden) return;
+    const M = model(), p = dash.params(), c = cfgOf(p), f = filtersOf(p);
+    if (c.rds === 'fish' && c.rcat !== 'total' && !c.rval) { const o = valueOptions(M, c); c.rval = o[0]?.value || ''; }
+    if (c.rds === 'benthic' && !c.rval) c.rval = 'Hard coral';
+    const res = compute(M, c, f);
+    last = { c, f, res };
+    const unit = unitOf(c), mname = measureName(c);
+    $('reef-title').textContent = `${mname} (${unit})`;
+    $('reef-subtitle').textContent = `Mean ± SE by ${c.rx.map((d) => DIM[d]).join(' × ')} · ${c.rmar === 'split' ? 'MA, R and control shown separately' : 'MA and R pooled (controls left out)'} · ${fmt.int(res.nSus)} transects`;
+    $('reef-export-wrap').hidden = !res.rows.length;
+    drawTable();
+    if (!res.rows.length) { legend.replaceChildren(); method.textContent = ''; return FF.empty(box); }
+    // Legend
+    const mg = [...new Set(res.rows.map((r) => r.mgmt))];
+    legend.replaceChildren(...mg.map((m) => { const s = document.createElement('span'); const i = document.createElement('i'); i.className = 'ff-sw'; i.style.background = MGC[m]; s.append(i, document.createTextNode(m === 'all' ? 'MA and R pooled' : MG[m])); return s; }), (() => { const s = document.createElement('span'); s.textContent = 'Error bars: ± 1 SE'; return s; })());
+    // Chart: one slot per x label, bars for each management inside it
+    const labels = [...new Set(res.rows.map((r) => r.label))];
+    const per = mg.length, slotMin = Math.max(26, per * 16 + 10);
+    const avail = Math.max(280, box.parentElement.clientWidth);
+    const H = 360;
+    const ymax = d3.max(res.rows, (r) => r.mean + r.se) || 1;
+    const y = d3.scaleLinear([0, ymax], [0, 0]).nice();
+    const ticks = y.ticks(5); const yf = (v) => d3.format(',')(v);
+    const svgM = d3.create('svg'); document.body.appendChild(svgM.node());
+    let ml = 0; ticks.forEach((tk) => { const t = svgM.append('text').attr('font-size', 12).text(yf(tk)); ml = Math.max(ml, t.node().getComputedTextLength()); });
+    let lw = 0; labels.forEach((l) => { const t = svgM.append('text').attr('font-size', 12).text(l); lw = Math.max(lw, t.node().getComputedTextLength()); });
+    svgM.node().remove();
+    ml = Math.ceil(ml) + 10 + 22;
+    let W = Math.max(avail, ml + 12 + labels.length * slotMin);
+    const rotate = lw + 8 > (W - ml - 12) / labels.length;
+    // Room on the left for the first slanted label
+    if (rotate) { const need = Math.min(lw, 200) * 0.77 - 6; if (need > ml) { W += need - ml; ml = need; } }
+    const bottom = rotate ? Math.min(160, lw * 0.72 + 16) : 26;
+    const top = 14, ph = H - top - bottom;
+    y.range([top + ph, top]);
+    const x = d3.scaleBand(labels, [ml, W - 12]).paddingInner(0.18).paddingOuter(0.08);
+    const xi = d3.scaleBand(mg, [0, x.bandwidth()]).padding(per > 1 ? 0.08 : 0);
+    const svg = d3.create('svg').attr('width', W).attr('height', H).attr('viewBox', `0 0 ${W} ${H}`).attr('role', 'img').attr('aria-label', `${mname} by ${c.rx.map((d) => DIM[d]).join(' and ')}`);
+    svg.append('g').selectAll('line').data(ticks).join('line').attr('x1', ml).attr('x2', W - 6).attr('y1', (tk) => y(tk)).attr('y2', (tk) => y(tk)).attr('stroke', 'var(--cds-chart-grid)');
+    svg.append('g').selectAll('text').data(ticks).join('text').attr('x', ml - 8).attr('y', (tk) => y(tk)).attr('dy', '0.32em').attr('text-anchor', 'end').attr('font-size', 12).attr('fill', 'var(--color-fg-muted)').text(yf);
+    svg.append('text').attr('transform', `translate(14,${top + ph / 2}) rotate(-90)`).attr('text-anchor', 'middle').attr('font-size', 12).attr('font-weight', 500).attr('fill', 'var(--color-fg)').text(`${mname} (${unit})`);
+    svg.append('line').attr('x1', ml).attr('x2', W - 6).attr('y1', y(0)).attr('y2', y(0)).attr('stroke', 'var(--cds-chart-axis)');
+    const lab = svg.append('g').selectAll('text').data(labels).join('text').attr('font-size', 12).attr('fill', 'var(--color-fg-muted)').text((l) => l);
+    if (rotate) lab.attr('text-anchor', 'end').attr('transform', (l) => `translate(${x(l) + x.bandwidth() / 2 + 4},${y(0) + 10}) rotate(-40)`);
+    else lab.attr('text-anchor', 'middle').attr('x', (l) => x(l) + x.bandwidth() / 2).attr('y', y(0) + 18);
+    const g = svg.append('g');
+    const bx = (r) => x(r.label) + xi(r.mgmt);
+    const bars = g.selectAll('rect').data(res.rows).join('rect').attr('x', bx).attr('width', Math.max(1, xi.bandwidth())).attr('y', (r) => y(r.mean)).attr('height', (r) => Math.max(0, y(0) - y(r.mean))).attr('rx', Math.min(3, xi.bandwidth() / 3)).attr('fill', (r) => MGC[r.mgmt]);
+    const eb = g.append('g').attr('stroke', 'var(--color-fg)').attr('stroke-width', 1.2);
+    res.rows.filter((r) => r.n > 1 && r.se > 0).forEach((r) => {
+      const cx = bx(r) + xi.bandwidth() / 2, cap = Math.min(6, xi.bandwidth() / 3);
+      eb.append('line').attr('x1', cx).attr('x2', cx).attr('y1', y(r.mean + r.se)).attr('y2', y(Math.max(0, r.mean - r.se)));
+      eb.append('line').attr('x1', cx - cap).attr('x2', cx + cap).attr('y1', y(r.mean + r.se)).attr('y2', y(r.mean + r.se));
+      eb.append('line').attr('x1', cx - cap).attr('x2', cx + cap).attr('y1', y(Math.max(0, r.mean - r.se))).attr('y2', y(Math.max(0, r.mean - r.se)));
+    });
+    g.append('g').selectAll('rect').data(res.rows).join('rect').attr('x', bx).attr('width', Math.max(4, xi.bandwidth())).attr('y', top).attr('height', ph).attr('fill', 'transparent')
+      .on('mousemove', (e, r) => { bars.attr('opacity', (b) => b === r ? 1 : 0.45); tip.show(e, r.label + (r.mgmt !== 'all' ? ' · ' + MG[r.mgmt] : ''), [[MGC[r.mgmt], 'Mean', `${num(r.mean, c)} ${unit}`], [null, 'SE', r.n > 1 ? num(r.se, c) : '—'], [null, 'Replicates', `${fmt.int(r.n)} ${res.bySite ? 'transects' : 'sites'}`], [null, 'Transects', fmt.int(r.tr)]]); })
+      .on('mouseleave', () => { bars.attr('opacity', 1); tip.hide(); });
+    box.replaceChildren(svg.node());
+    const what = c.rds === 'benthic'
+      ? `Benthic PIT: percent of points in the category on each transect, as calculated by MERMAID (categories absent from a transect count as 0%).`
+      : `Fish belt: ${c.rmet === 'bio' ? 'biomass (kg/ha) summed over the fish on each transect, using MERMAID’s length-weight biomass' : 'abundance as individuals per hectare, each count divided by the transect area it was counted in (length × assigned width)'}${c.rcat === 'total' ? '' : `, for ${({ family: 'the family', trophic: 'the trophic group', functional: 'the functional group', taxon: 'the species' })[c.rcat]} ${c.rval} only (transects without it count as 0)`}.`;
+    const how = res.bySite ? 'With Site on the X-axis, the mean and SE are taken over the transects at each site.' : 'Transects are first averaged within each site and year; the mean and SE are then taken over those site means, so n is the number of sites.';
+    method.textContent = `${what} ${how} SE = standard deviation ÷ √n; groups with one replicate have no error bar. MA = managed access, R = reserve (no-take), Control = control sites outside the managed area${c.rmar === 'pooled' ? ' (left out when MA and R are pooled)' : ''}. Managed areas are named by the site-code prefix used in MERMAID. Source: MERMAID exports of the 2025 Biophysical Surveys (North Sulawesi; Southeast Sulawesi Northern Part, Southern Part and Impact Bond).`;
+  });
+
+  // ---- exports ----
+  let downloads = null;
+  claude.use('downloads').then((d) => { downloads = d; }).catch(() => {});
+  const slug = (s) => s.replace(/[^\p{L}\p{N}]+/gu, '_').replace(/^_+|_+$/g, '');
+  const fileBase = () => last ? slug(`Reef_${measureName(last.c)}_by_${last.c.rx.join('_')}`) : 'Reef';
+  $('reef-csv').addEventListener('click', async () => {
+    if (!last || !downloads) return;
+    const q = (v) => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v;
+    const head = [...last.c.rx.map((d) => DIM[d]), 'Management', `Mean (${unitOf(last.c)})`, 'SE', 'Replicates', 'Replicate unit', 'Transects'];
+    const body = last.res.rows.map((r) => [...r.label.split(' · '), r.mgmt === 'all' ? 'MA and R pooled' : MG[r.mgmt], d3.format('.3f')(r.mean), r.n > 1 ? d3.format('.3f')(r.se) : '', r.n, last.res.bySite ? 'transect' : 'site', r.tr].map(q).join(','));
+    try { await downloads.save({ filename: fileBase() + '.csv', data: new Blob([[head.map(q).join(','), ...body].join('\n')], { type: 'text/csv' }) }); } catch (e) {}
+  });
+  const inline = (src, dst) => { const cs = getComputedStyle(src); for (const k of ['fill', 'stroke', 'stroke-width', 'opacity', 'font-family', 'font-size', 'font-weight']) dst.style.setProperty(k, cs.getPropertyValue(k)); for (let i = 0; i < src.children.length; i++) inline(src.children[i], dst.children[i]); };
+  $('reef-png').addEventListener('click', async () => {
+    const svg = box.querySelector('svg'); if (!svg || !downloads) return;
+    const btn = $('reef-png'); btn.disabled = true;
+    try {
+      const cs = getComputedStyle(card), bg = cs.backgroundColor, fg = cs.color, muted = getComputedStyle($('reef-subtitle')).color, font = getComputedStyle($('reef-title')).fontFamily;
+      const W = Number(svg.getAttribute('width')), H = Number(svg.getAttribute('height'));
+      const clone = svg.cloneNode(true); inline(svg, clone); clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+      const img = new Image();
+      await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(clone)); });
+      const pad = 28, Wc = Math.max(W, 640) + pad * 2, scale = 2;
+      const c = document.createElement('canvas'), ctx = c.getContext('2d');
+      const wrap = (t, mw) => { const w = t.split(' '), out = []; let cur = ''; for (const x of w) { const n = cur ? cur + ' ' + x : x; if (ctx.measureText(n).width > mw && cur) { out.push(cur); cur = x; } else cur = n; } if (cur) out.push(cur); return out; };
+      ctx.font = `12px ${font}`; const note = wrap($('reef-method').textContent, Wc - pad * 2);
+      const leg = [...legend.querySelectorAll('span')].map((s) => ({ color: s.querySelector('i') ? getComputedStyle(s.querySelector('i')).backgroundColor : null, text: s.textContent }));
+      const Hc = pad + 28 + 20 + 26 + H + 14 + note.length * 16 + pad;
+      c.width = Wc * scale; c.height = Hc * scale; ctx.scale(scale, scale);
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, Wc, Hc); ctx.textBaseline = 'top';
+      let yy = pad;
+      ctx.fillStyle = fg; ctx.font = `600 20px ${font}`; ctx.fillText($('reef-title').textContent, pad, yy); yy += 28;
+      ctx.fillStyle = muted; ctx.font = `13px ${font}`; ctx.fillText($('reef-subtitle').textContent, pad, yy, Wc - pad * 2); yy += 20;
+      let xx = pad; leg.forEach((l) => { if (l.color) { ctx.fillStyle = l.color; ctx.fillRect(xx, yy + 3, 10, 10); xx += 16; } ctx.fillStyle = muted; ctx.fillText(l.text, xx, yy); xx += ctx.measureText(l.text).width + 22; }); yy += 26;
+      ctx.drawImage(img, pad, yy, W, H); yy += H + 14;
+      ctx.fillStyle = muted; ctx.font = `12px ${font}`; note.forEach((l) => { ctx.fillText(l, pad, yy); yy += 16; });
+      const blob = await new Promise((res) => c.toBlob(res, 'image/png'));
+      await downloads.save({ filename: fileBase() + '.png', data: blob });
+    } catch (e) {} finally { btn.disabled = false; }
   });
 })();
 </script>
