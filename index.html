@@ -60,8 +60,11 @@ html, body { margin: 0; background: var(--color-bg); color: var(--color-fg); fon
   };
   const tables = {};
   for (const [id, text] of Object.entries(src.files || {})) tables[id] = parseCSV(text);
-  const years = (tables.catch_cube?.data || []).map((r) => 2019 + Math.floor(Number(r.m) / 12));
-  const defaults = { provinces: [], districts: [], areas: [], families: [], units: [], y0: years.length ? Math.min(...years) : 2019, y1: years.length ? Math.max(...years) : 2019, metric: 'kg', ind: 'landings', step: 'day', sizeSp: null };
+  window.FF_BASE = Number(src.base_year) || 2019;
+  const SRC = (src.sources && src.sources.length) ? src.sources : ['digital'];
+  window.FF_SOURCES = SRC;
+  const years = (tables.catch_cube?.data || []).map((r) => FF_BASE + Math.floor(Number(r.m) / 12));
+  const defaults = { provinces: [], districts: [], areas: [], families: [], units: [], y0: years.length ? Math.min(...years) : FF_BASE, y1: years.length ? Math.max(...years) : FF_BASE, source: SRC.includes('digital') ? 'digital' : SRC[0], metric: 'kg', ind: 'landings', step: 'day', sizeSp: null };
   // Filters can come from the address (#y0=2024&ind=cpue …) so a view can be shared as a link
   const fromHash = () => { try { const h = new URLSearchParams(location.hash.slice(1)); const o = {}; for (const [k, v] of h) { if (!(k in defaults)) continue; o[k] = Array.isArray(defaults[k]) ? (v ? v.split('~') : []) : (typeof defaults[k] === 'number' ? Number(v) : v || null); } return o; } catch (e) { return {}; } };
   let params = { ...defaults, ...fromHash() };
@@ -187,6 +190,7 @@ html, body { margin: 0; background: var(--color-bg); color: var(--color-fg); fon
   </header>
 
   <div class="ff-controls" id="filters">
+    <label class="ff-field" id="src-wrap">Data source<select class="ff-src" aria-label="Data source"><option value="digital">Digital (Data Manager)</option><option value="paper">Paper-based (Google Sheet)</option><option value="both">Both</option></select></label>
     <div class="ff-field" id="ms-prov" data-source="areas">Provinces</div>
     <div class="ff-field" id="ms-dist" data-source="areas">Districts</div>
     <div class="ff-field" id="ms-area" data-source="areas">Managed access areas</div>
@@ -313,7 +317,7 @@ html, body { margin: 0; background: var(--color-bg); color: var(--color-fg); fon
   </section>
 
   <footer class="ff-foot" id="about">
-    <p>Source: Rare Fish Forever catch monitoring data (data.rare.org), updated <span id="ff-generated">—</span> (latest catch record <span id="ff-latest">—</span>). Values are in Indonesian rupiah as recorded. Figures are totals of catch records as entered; a few very large records are kept as recorded.</p>
+    <p>Sources: Rare Fish Forever catch monitoring data (data.rare.org) and the paper-based catch recording sheet for Indonesia, updated <span id="ff-generated">—</span> (latest catch record <span id="ff-latest">—</span>). Values are in Indonesian rupiah as recorded. Figures are totals of catch records as entered; a few very large records are kept as recorded.</p>
     <p>To protect privacy, this page holds only aggregated totals. No fisher or buyer names or IDs are included.</p>
   </footer>
 </div>
@@ -340,22 +344,24 @@ window.FF = (() => {
     const c = dash.data('catch_cube'), a = dash.data('areas'), b = dash.data('buying_units'), g = dash.data('gears');
     if ([c, a, b, g].some((d) => d.status !== 'ok')) return null;
     if (cache.src !== c.data || cache.a !== a.data || cache.b !== b.data || cache.g !== g.data) {
-      const areas = new Map(a.data.map((r) => [String(r.a), { id: String(r.a), province: r.province, district: r.district, dkey: r.province + '|' + r.district, name: r.managed_area, fishers: csvNum(r.fishers_all_years) }]));
+      const areas = new Map(a.data.map((r) => [String(r.a), { id: String(r.a), province: r.province, district: r.district, dkey: r.province + '|' + r.district, name: r.managed_area, fishersD: csvNum(r.fishers_digital ?? r.fishers_all_years ?? 0), fishersP: csvNum(r.fishers_paper ?? 0) }]));
       const sentence = (s) => { const x = String(s || '').trim().toLowerCase(); return x.charAt(0).toUpperCase() + x.slice(1); };
       const units = new Map(b.data.map((r) => [String(r.b), { id: String(r.b), name: sentence(r.buying_unit), species: r.species, family: r.family || 'Unknown', local: r.local_name }]));
       const gears = new Map(g.data.map((r) => [String(r.g), r.gear]));
-      const rows = c.data.map((r) => { const m = csvNum(r.m); return { m, year: 2019 + Math.floor(m / 12), a: String(r.a), b: String(r.b), g: String(r.g), kg: csvNum(r.kg), idr: csvNum(r.idr), n: csvNum(r.n) }; });
+      const rows = c.data.map((r) => { const m = csvNum(r.m); return { m, year: FF_BASE + Math.floor(m / 12), s: String(r.s ?? '0'), a: String(r.a), b: String(r.b), g: String(r.g), kg: csvNum(r.kg), idr: csvNum(r.idr), n: csvNum(r.n) }; });
       cache = { src: c.data, a: a.data, b: b.data, g: g.data, areas, units, gears, rows, maxMonth: d3.max(rows, (r) => r.m) ?? 0, years: [...new Set(rows.map((r) => r.year))].sort((x, y) => x - y), key: null, sel: null };
     }
     return cache;
   };
   const P = () => {
     const p = dash.params();
-    let y0 = Number(p.y0 ?? 2019), y1 = Number(p.y1 ?? 2026);
+    let y0 = Number(p.y0 ?? FF_BASE), y1 = Number(p.y1 ?? FF_BASE);
     if (y0 > y1) [y0, y1] = [y1, y0];
     const list = (v) => Array.isArray(v) ? v.map(String) : [];
-    return { provs: list(p.provinces), dists: list(p.districts), areas: list(p.areas), fams: list(p.families), units: list(p.units), y0, y1, metric: p.metric || 'kg' };
+    return { provs: list(p.provinces), dists: list(p.districts), areas: list(p.areas), fams: list(p.families), units: list(p.units), y0, y1, source: ['digital', 'paper', 'both'].includes(p.source) ? p.source : 'digital', metric: p.metric || 'kg' };
   };
+  // Which records the data-source switch keeps (s: 0 digital, 1 paper)
+  const srcOk = (f) => f.source === 'both' ? () => true : f.source === 'paper' ? (s) => s === '1' : (s) => s === '0';
   // Which areas the location filters allow
   const areaOk = (M, f) => {
     const ps = new Set(f.provs), ds = new Set(f.dists), as = new Set(f.areas);
@@ -367,7 +373,8 @@ window.FF = (() => {
     if (M.key === key) return M.sel;
     const ok = areaOk(M, f); const us = new Set(f.units), fs = new Set(f.fams);
     const allowed = new Set([...M.areas.values()].filter(ok).map((x) => x.id));
-    const rows = M.rows.filter((r) => r.year >= f.y0 && r.year <= f.y1 && allowed.has(r.a) && (!us.size || us.has(r.b)) && (!fs.size || fs.has(M.units.get(r.b)?.family || 'Unknown')));
+    const so = srcOk(f);
+    const rows = M.rows.filter((r) => so(r.s) && r.year >= f.y0 && r.year <= f.y1 && allowed.has(r.a) && (!us.size || us.has(r.b)) && (!fs.size || fs.has(M.units.get(r.b)?.family || 'Unknown')));
     M.key = key; M.sel = { f, rows, kg: d3.sum(rows, (r) => r.kg), idr: d3.sum(rows, (r) => r.idr), n: d3.sum(rows, (r) => r.n) };
     return M.sel;
   };
@@ -407,7 +414,7 @@ window.FF = (() => {
     th.setAttribute('aria-sort', k === state.key ? (state.dir > 0 ? 'ascending' : 'descending') : 'none');
   });
   const cmp = (state) => (a, b) => { const x = a[state.key], y = b[state.key]; return (typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y))) * state.dir; };
-  return { famName, gearName, fmt, model, P, areaOk, selected, label, statusOf, fail, empty, tip, sortTable, setSort, cmp };
+  return { famName, gearName, fmt, model, P, srcOk, areaOk, selected, label, statusOf, fail, empty, tip, sortTable, setSort, cmp };
 })();
 </script>
 
@@ -469,6 +476,8 @@ window.FF = (() => {
   const msFam = make(document.getElementById('ms-fam'), { all: 'All families', param: 'families' });
   const msUnit = make(document.getElementById('ms-unit'), { all: 'All buying units', param: 'units' });
   const y0 = document.querySelector('.ff-y0'), y1 = document.querySelector('.ff-y1');
+  const srcSel = document.querySelector('.ff-src'), srcWrap = document.getElementById('src-wrap');
+  srcSel.addEventListener('change', () => dash.setParams({ source: srcSel.value }));
   y0.addEventListener('change', () => dash.setParams({ y0: Number(y0.value) }));
   y1.addEventListener('change', () => dash.setParams({ y1: Number(y1.value) }));
   document.querySelector('.ff-reset').addEventListener('click', () => dash.resetParams());
@@ -478,7 +487,9 @@ window.FF = (() => {
     const f = FF.P(), M = FF.model();
     document.querySelectorAll('#metric-toggle .ff-btn').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.m === f.metric)));
     if (!M) return;
-    const areas = [...M.areas.values()];
+    const so = FF.srcOk(f); const hasSrc = new Set(M.rows.filter((r) => so(r.s)).map((r) => r.a));
+    const areas = [...M.areas.values()].filter((a) => hasSrc.has(a.id));
+    srcSel.value = f.source; [...srcSel.options].forEach((o) => { o.hidden = o.value !== 'both' ? !FF_SOURCES.includes(o.value) : FF_SOURCES.length < 2; }); srcWrap.hidden = FF_SOURCES.length < 2;
     // Drop picks that the wider filters no longer allow
     const provs = [...new Set(areas.map((a) => a.province))].sort();
     const distScope = areas.filter((a) => !f.provs.length || f.provs.includes(a.province));
@@ -493,7 +504,7 @@ window.FF = (() => {
     const aOpts = areaScope.map((a) => ({ value: a.id, label: a.name, group: a.district + ', ' + a.province })).sort((a, b) => a.group.localeCompare(b.group) || (a.label.startsWith('Outside') - b.label.startsWith('Outside')) || a.label.localeCompare(b.label));
     msArea.update(aOpts, f.areas);
     // Families and buying units with catch in the chosen places and years, A to Z
-    const unitKg = d3.rollup(M.rows.filter((r) => akeys.has(r.a) && (!f.areas.length || f.areas.includes(r.a)) && r.year >= f.y0 && r.year <= f.y1), (v) => d3.sum(v, (r) => r.kg), (r) => r.b);
+    const unitKg = d3.rollup(M.rows.filter((r) => so(r.s) && akeys.has(r.a) && (!f.areas.length || f.areas.includes(r.a)) && r.year >= f.y0 && r.year <= f.y1), (v) => d3.sum(v, (r) => r.kg), (r) => r.b);
     const famKg = d3.rollup([...unitKg], (v) => d3.sum(v, ([, kg]) => kg), ([b]) => M.units.get(b)?.family || 'Unknown');
     const fOpts = [...new Set([...famKg.keys(), ...f.fams])].sort((a, b) => a.localeCompare(b))
       .map((fm) => ({ value: fm, label: fm, sub: `${FF.famName[fm] ? FF.famName[fm] + ' · ' : ''}${FF.fmt.tTip(famKg.get(fm) || 0)}` }));
@@ -540,9 +551,11 @@ window.FF = (() => {
     }
     const sum = dash.data('summary'), snap = document.getElementById('snapshot');
     if (sum.status === 'ok' && sum.data.length) {
-      const r = sum.data[0]; snap.classList.remove('dash-skeleton');
+      snap.classList.remove('dash-skeleton');
       const d = (x) => d3.utcFormat('%b %-d, %Y')(new Date(x + 'T00:00:00Z'));
-      snap.textContent = `Snapshot of ${fmt.int(Number(r.records))} catch records from ${fmt.int(Number(r.fishers))} fishers and ${fmt.int(Number(r.species))} species, ${d(r.first_date)} to ${d(r.last_date)}.`;
+      const so = FF.srcOk(FF.P()); const rs = sum.data.filter((r) => so(String(r.s ?? '0')));
+      const name = { 0: 'digital', 1: 'paper-based' };
+      snap.textContent = rs.length ? rs.map((r) => `${fmt.int(Number(r.records))} ${rs.length > 1 ? name[r.s] + ' ' : ''}catch records from ${fmt.int(Number(r.fishers))} fishers and ${fmt.int(Number(r.species))} species, ${d(r.first_date)} to ${d(r.last_date)}`).join('; ') + '.' : 'No records for this data source.';
     } else if (sum.status !== 'loading') { snap.classList.remove('dash-skeleton'); snap.textContent = '—'; }
   });
 })();
@@ -564,10 +577,10 @@ window.FF = (() => {
     const S = FF.selected(), f = S.f, mk = ['kg', 'idr', 'n'].includes(f.metric) ? f.metric : 'kg';
     if (!S.rows.length) return FF.empty(box);
     const all = [];
-    for (let m = (f.y0 - 2019) * 12; m <= Math.min((f.y1 - 2019) * 12 + 11, FF.model().maxMonth); m++) all.push(m);
+    for (let m = (f.y0 - FF_BASE) * 12; m <= Math.min((f.y1 - FF_BASE) * 12 + 11, FF.model().maxMonth); m++) all.push(m);
     const byM = d3.rollup(S.rows, (v) => d3.sum(v, (r) => r[mk]), (r) => r.m);
     const series = all.map((m) => ({ m, v: byM.get(m) || 0 }));
-    const mDate = (m) => new Date(Date.UTC(2019 + Math.floor(m / 12), m % 12, 1));
+    const mDate = (m) => new Date(Date.UTC(FF_BASE + Math.floor(m / 12), m % 12, 1));
     const W = Math.max(280, box.clientWidth), H = 280;
     const y = d3.scaleLinear([0, d3.max(series, (s) => s.v) || 1], [H - 26, 10]).nice();
     const ticks = y.ticks(5);
@@ -581,9 +594,9 @@ window.FF = (() => {
     svg.append('g').selectAll('line').data(ticks).join('line').attr('x1', ml).attr('x2', W - 6).attr('y1', (t) => y(t)).attr('y2', (t) => y(t)).attr('stroke', 'var(--cds-chart-grid)');
     svg.append('g').selectAll('text').data(ticks).join('text').attr('x', ml - 8).attr('y', (t) => y(t)).attr('dy', '0.32em').attr('text-anchor', 'end').attr('font-size', 12).attr('fill', 'var(--color-fg-muted)').text((t) => axisF[mk](t));
     const nYears = f.y1 - f.y0 + 1, step = nYears > 6 && W < 700 ? 2 : 1;
-    const xt = nYears === 1 ? all.filter((m, i) => i % (W < 500 ? 3 : 2) === 0) : all.filter((m) => m % 12 === 0 && (Math.floor(m / 12) + 2019 - f.y0) % step === 0);
+    const xt = nYears === 1 ? all.filter((m, i) => i % (W < 500 ? 3 : 2) === 0) : all.filter((m) => m % 12 === 0 && (Math.floor(m / 12) + FF_BASE - f.y0) % step === 0);
     svg.append('g').selectAll('text').data(xt).join('text').attr('x', (m) => x(m)).attr('y', H - 6).attr('font-size', 12).attr('fill', 'var(--color-fg-muted)')
-      .text((m) => nYears === 1 ? d3.utcFormat('%b')(mDate(m)) : String(2019 + Math.floor(m / 12)));
+      .text((m) => nYears === 1 ? d3.utcFormat('%b')(mDate(m)) : String(FF_BASE + Math.floor(m / 12)));
     svg.append('line').attr('x1', ml).attr('x2', W - 6).attr('y1', y(0)).attr('y2', y(0)).attr('stroke', 'var(--cds-chart-axis)');
     const bars = svg.append('g').selectAll('rect').data(series).join('rect')
       .attr('x', (s) => x(s.m)).attr('width', Math.max(1, x.bandwidth())).attr('y', (s) => y(s.v)).attr('height', (s) => Math.max(0, y(0) - y(s.v)))
@@ -727,7 +740,7 @@ window.FF = (() => {
   table('districts', 'district-search', (rows, M) => d3.rollups(rows, totals, (r) => M.areas.get(r.a).dkey).map(([k, t]) => { const [province, name] = k.split('|'); return { ...t, name, province, search: `${name} ${province}` }; }),
     (r, max) => [td(r.name), td(r.province, 'ff-hide-narrow'), td(incell(r.kg, max, fmt.t(r.kg)), 'num'), td(fmt.idrFull(r.idr), 'num'), td(fmt.perKg(r.price), 'num ff-hide-narrow'), td(fmt.int(r.n), 'num ff-hide-narrow')]);
 
-  table('areas', 'area-search', (rows, M) => d3.rollups(rows, totals, (r) => r.a).map(([a, t]) => { const ar = M.areas.get(a); return { ...t, name: ar.name, district: ar.district, fishers: ar.fishers, search: `${ar.name} ${ar.district} ${ar.province}` }; }),
+  table('areas', 'area-search', (rows, M) => d3.rollups(rows, totals, (r) => r.a).map(([a, t]) => { const ar = M.areas.get(a); const so = FF.P().source; return { ...t, name: ar.name, district: ar.district, fishers: so === 'paper' ? ar.fishersP : so === 'both' ? ar.fishersD + ar.fishersP : ar.fishersD, search: `${ar.name} ${ar.district} ${ar.province}` }; }),
     (r, max) => [td(r.name), td(r.district, 'ff-hide-narrow'), td(incell(r.kg, max, fmt.t(r.kg)), 'num'), td(fmt.idrFull(r.idr), 'num'), td(fmt.int(r.n), 'num ff-hide-narrow'), td(fmt.int(r.fishers), 'num ff-hide-narrow')]);
 
   const named = document.getElementById(location.hash.slice(1));
@@ -745,7 +758,7 @@ window.FF = (() => {
   sp.addEventListener('change', () => dash.setParams({ sizeSp: sp.value || null }));
   const stepWrap = document.getElementById('ind-step-wrap');
   document.querySelectorAll('#ind-step .ff-btn').forEach((b) => b.addEventListener('click', () => dash.setParams({ step: b.dataset.s })));
-  const DAY = 86400000, T0 = Date.UTC(2019, 0, 1);
+  const DAY = 86400000, T0 = Date.UTC(FF_BASE, 0, 1);
 
   let ext = { s: null, p: null, c: null, t: null };
   const extra = () => {
@@ -755,10 +768,10 @@ window.FF = (() => {
       const yr = (d) => new Date(T0 + d * DAY).getUTCFullYear();
       ext = {
         s: sz.data, p: pr.data, c: dc.data, t: dt.data,
-        size: sz.data.map((r) => ({ b: String(r.b), a: String(r.a), year: Number(r.year), len: Number(r.len_cm), fish: Number(r.fish) })),
+        size: sz.data.map((r) => ({ b: String(r.b), a: String(r.a), s: String(r.s ?? '0'), year: Number(r.year), len: Number(r.len_cm), fish: Number(r.fish) })),
         params: new Map(pr.data.filter((r) => r.lmax_cm !== '' && Number(r.lmax_cm) > 0).map((r) => [String(r.b), { lmax: Number(r.lmax_cm), linf: Number(r.linf_cm), lmat: Number(r.lmat_cm), lopt: Number(r.lopt_cm), lmega: Number(r.lmega_cm), a: Number(r.lw_a), bb: Number(r.lw_b) }])),
-        dcatch: dc.data.map((r) => { const d = Number(r.d); return { d, year: yr(d), a: String(r.a), b: String(r.b), kg: Number(r.kg) }; }),
-        dtrips: dt.data.map((r) => { const d = Number(r.d); return { d, year: yr(d), a: String(r.a), trips: Number(r.trips) }; }),
+        dcatch: dc.data.map((r) => { const d = Number(r.d); return { d, year: yr(d), s: String(r.s ?? '0'), a: String(r.a), b: String(r.b), kg: Number(r.kg) }; }),
+        dtrips: dt.data.map((r) => { const d = Number(r.d); return { d, year: yr(d), s: String(r.s ?? '0'), a: String(r.a), trips: Number(r.trips) }; }),
       };
     }
     return ext;
@@ -819,8 +832,9 @@ window.FF = (() => {
   const daily = (E, M, f, kind, step) => {
     const ok = FF.areaOk(M, f); const allowed = new Set([...M.areas.values()].filter(ok).map((a) => a.id));
     const us = new Set(f.units), fs = new Set(f.fams);
-    const kg = d3.rollup(E.dcatch.filter((r) => r.year >= f.y0 && r.year <= f.y1 && allowed.has(r.a) && (!us.size || us.has(r.b)) && (!fs.size || fs.has(M.units.get(r.b)?.family || 'Unknown'))), (v) => d3.sum(v, (r) => r.kg), (r) => r.d);
-    const tr = d3.rollup(E.dtrips.filter((r) => r.year >= f.y0 && r.year <= f.y1 && allowed.has(r.a)), (v) => d3.sum(v, (r) => r.trips), (r) => r.d);
+    const so = FF.srcOk(f);
+    const kg = d3.rollup(E.dcatch.filter((r) => so(r.s) && r.year >= f.y0 && r.year <= f.y1 && allowed.has(r.a) && (!us.size || us.has(r.b)) && (!fs.size || fs.has(M.units.get(r.b)?.family || 'Unknown'))), (v) => d3.sum(v, (r) => r.kg), (r) => r.d);
+    const tr = d3.rollup(E.dtrips.filter((r) => so(r.s) && r.year >= f.y0 && r.year <= f.y1 && allowed.has(r.a)), (v) => d3.sum(v, (r) => r.trips), (r) => r.d);
     // Group days into the chosen period; each period sits at its middle (15th of the month, July 1)
     const key = (d) => { if (step === 'day') return d; const dt = new Date(T0 + d * DAY), y = dt.getUTCFullYear(); return step === 'year' ? Math.round((Date.UTC(y, 6, 1) - T0) / DAY) : Math.round((Date.UTC(y, dt.getUTCMonth(), 15) - T0) / DAY); };
     const kgP = d3.rollup([...kg], (v) => d3.sum(v, ([, x]) => x), ([d]) => key(d));
@@ -884,7 +898,7 @@ window.FF = (() => {
     leg.replaceChildren(...(sm.length ? [leg0, leg1] : [leg0]));
     method.textContent = (kind === 'landings'
       ? `Each point is the total catch weight landed in one ${per[0]} for the filters. `
-      : `Each point is one ${per[0]}’s catch for the filters divided by the fishing trips in that ${per[0]} in the selected places (a trip is one fisher landing catch on one day); family and buying-unit filters narrow the catch only. `)
+      : `Each point is one ${per[0]}’s catch for the filters divided by the fishing trips in that ${per[0]} in the selected places (${f.source === 'paper' ? 'a trip is one trip_id in the paper records' : f.source === 'both' ? 'a trip is one fisher landing catch on one day for digital records and one trip_id for paper records' : 'a trip is one fisher landing catch on one day'}); family and buying-unit filters narrow the catch only. `)
       + (sm.length ? '' : 'With fewer than 4 points no LOESS line is drawn. ')
       + `The line is a LOESS smooth (span 0.5, degree 2) with a 95% confidence band, like geom_smooth(method = "loess", span = 0.5). The trend is a Gaussian GLM of the ${per[2].toLowerCase()} value on date: Increased or Decreased when the slope’s p-value (adjusted with p.adjust; one group, so unchanged) is below 0.05, otherwise Stable. ` + (g ? `Result: slope ${g.b >= 0 ? '+' : ''}${d3.format(',.2f')(g.b * 365)} ${unit} per year (estimate ${d3.format('.4f')(g.b)} ${unit} per day, std. error ${d3.format('.4f')(g.se)}), t statistic ${d3.format('.2f')(g.t)}, adjusted p-value ${pFmt(g.padj)}, n = ${fmt.int(pts.length)} ${per[1]}, so the trend is ${g.trend}.` : 'Too few points to test a trend.');
     return svg;
@@ -919,12 +933,15 @@ window.FF = (() => {
   const drawSize = (f, W, H, E, M, b) => {
     const prm = E.params.get(b), u = M.units.get(b);
     const ok = FF.areaOk(M, f); const allowed = new Set([...M.areas.values()].filter(ok).map((a) => a.id));
-    const rows = E.size.filter((r) => r.b === b && allowed.has(r.a) && r.year >= f.y0 && r.year <= f.y1);
+    const so = FF.srcOk(f);
+    const rows = E.size.filter((r) => r.b === b && so(r.s) && allowed.has(r.a) && r.year >= f.y0 && r.year <= f.y1);
     const n = d3.sum(rows, (r) => r.fish);
-    if (!n || !prm) { stats.replaceChildren(); leg.replaceChildren(); method.textContent = 'No length estimates for this species in the selection.'; return null; }
-    const bw = Math.max(1, Math.round(prm.lmax / 40));
+    if (!n) { stats.replaceChildren(); leg.replaceChildren(); method.textContent = 'No lengths for this species in the selection.'; return null; }
+    const hasD = rows.some((r) => r.s === '0'), hasP = rows.some((r) => r.s === '1');
+    const lenMax = d3.max(rows, (r) => r.len) + 1;
+    const bw = Math.max(1, Math.round((prm ? prm.lmax : lenMax) / 40));
     const bins = d3.rollup(rows, (v) => d3.sum(v, (r) => r.fish), (r) => Math.floor(r.len / bw) * bw);
-    const xmax = Math.ceil(Math.max(d3.max(rows, (r) => r.len) + 1, prm.lmega * 1.1) / bw) * bw;
+    const xmax = Math.ceil(Math.max(lenMax, prm ? prm.lmega * 1.1 : 0) / bw) * bw;
     const ser = d3.range(0, xmax, bw).map((l) => ({ l, fish: bins.get(l) || 0 }));
     const y = d3.scaleLinear([0, d3.max(ser, (s) => s.fish) || 1], [H - 40, 22]).nice();
     const ticks = y.ticks(5);
@@ -939,11 +956,11 @@ window.FF = (() => {
     svg.append('g').selectAll('text').data(ticks).join('text').attr('x', ml - 8).attr('y', (tk) => y(tk)).attr('dy', '0.32em').attr('text-anchor', 'end').attr('font-size', 12).attr('fill', 'var(--color-fg-muted)').text((tk) => d3.format('~s')(tk));
     const xt = x.ticks(Math.max(3, Math.floor(W / 80)));
     svg.append('g').selectAll('text').data(xt).join('text').attr('x', (v) => x(v)).attr('y', H - 22).attr('text-anchor', 'middle').attr('font-size', 12).attr('fill', 'var(--color-fg-muted)').text((v) => v);
-    svg.append('text').attr('x', (ml + W - 10) / 2).attr('y', H - 4).attr('text-anchor', 'middle').attr('font-size', 12).attr('fill', 'var(--color-fg-muted)').text('Estimated length (cm)');
+    svg.append('text').attr('x', (ml + W - 10) / 2).attr('y', H - 4).attr('text-anchor', 'middle').attr('font-size', 12).attr('fill', 'var(--color-fg-muted)').text(hasD && !hasP ? 'Estimated length (cm)' : hasP && !hasD ? 'Measured length (cm)' : 'Length (cm)');
     svg.append('line').attr('x1', ml).attr('x2', W - 6).attr('y1', y(0)).attr('y2', y(0)).attr('stroke', 'var(--cds-chart-axis)');
-    const colOf = (l) => l + bw <= prm.lmat ? 'var(--cds-chart-status-critical)' : dash.colors[0];
+    const colOf = (l) => prm && l + bw <= prm.lmat ? 'var(--cds-chart-status-critical)' : dash.colors[0];
     const bars = svg.append('g').selectAll('rect').data(ser).join('rect').attr('x', (s) => x(s.l) + 0.5).attr('width', (s) => Math.max(1, x(s.l + bw) - x(s.l) - 1)).attr('y', (s) => y(s.fish)).attr('height', (s) => Math.max(0, y(0) - y(s.fish))).attr('rx', 2).attr('fill', (s) => colOf(s.l));
-    const refs = [['Lmat', prm.lmat, 'var(--cds-chart-status-critical)'], ['Lopt', prm.lopt, dash.colors[2]], ['Lmega', prm.lmega, dash.colors[3]]];
+    const refs = prm ? [['Lmat', prm.lmat, 'var(--cds-chart-status-critical)'], ['Lopt', prm.lopt, dash.colors[2]], ['Lmega', prm.lmega, dash.colors[3]]] : [];
     const rg = svg.append('g');
     let lastX = -1e9, row = 0;
     refs.forEach(([nm, v, c]) => {
@@ -961,14 +978,19 @@ window.FF = (() => {
     const share = (test) => d3.sum(rows.filter((r) => test(r.len + 0.5)), (r) => r.fish) / n;
     const mean = d3.sum(rows, (r) => (r.len + 0.5) * r.fish) / n;
     stats.replaceChildren(
-      stat('Fish measured (estimated)', fmt.int(n)),
+      stat(hasP && !hasD ? 'Fish measured' : hasD && !hasP ? 'Fish (estimated lengths)' : 'Fish', fmt.int(n)),
       stat('Mean length', d3.format('.1f')(mean) + ' cm'),
-      stat('Mature (≥ Lmat)', d3.format('.0%')(share((l) => l >= prm.lmat))),
-      stat('At or above Lopt (≥ Lopt)', d3.format('.0%')(share((l) => l >= prm.lopt))),
-      stat('Mega-spawners (> Lmega)', d3.format('.0%')(share((l) => l > prm.lmega))),
+      ...(prm ? [
+        stat('Mature (≥ Lmat)', d3.format('.0%')(share((l) => l >= prm.lmat))),
+        stat('At or above Lopt (≥ Lopt)', d3.format('.0%')(share((l) => l >= prm.lopt))),
+        stat('Mega-spawners (> Lmega)', d3.format('.0%')(share((l) => l > prm.lmega))),
+      ] : []),
     );
-    leg.replaceChildren(...[['Below Lmat (immature)', 'var(--cds-chart-status-critical)'], ['At or above Lmat', dash.colors[0]]].map(([nm, c]) => { const s = document.createElement('span'); const i = document.createElement('i'); i.className = 'ff-sw'; i.style.background = c; s.append(i, document.createTextNode(nm)); return s; }));
-    method.textContent = `${u.name} (${u.local}). Length is estimated per catch record from mean fish weight (total weight ÷ fish count) with W = a·L^b, a = ${prm.a}, b = ${prm.bb}; every fish in a record gets that mean length. Reference lengths from Lmax ${prm.lmax} cm: L∞ via Froese & Binohlan (2000), Lmat and Lopt from L∞ by the same authors' empirical equations, Lmega = 1.1 × Lopt (Froese 2004). Bars are ${bw} cm wide. Only records sold by weight with a fish count are used.`;
+    leg.replaceChildren(...(prm ? [['Below Lmat (immature)', 'var(--cds-chart-status-critical)'], ['At or above Lmat', dash.colors[0]]] : [['Fish per length class', dash.colors[0]]]).map(([nm, c]) => { const s = document.createElement('span'); const i = document.createElement('i'); i.className = 'ff-sw'; i.style.background = c; s.append(i, document.createTextNode(nm)); return s; }));
+    const howD = `digital records: length estimated per catch record from mean fish weight (total weight ÷ fish count) with W = a·L^b${prm && prm.a ? ` (a = ${prm.a}, b = ${prm.bb})` : ''}, every fish in a record getting that mean length; only records sold by weight with a fish count`;
+    const howP = 'paper records: the measured length column, each record counted as many times as its fish count';
+    const refTxt = prm ? `Reference lengths from Lmax ${prm.lmax} cm: L∞ via Froese & Binohlan (2000), Lmat and Lopt from L∞ by the same authors' empirical equations, Lmega = 1.1 × Lopt (Froese 2004).` : 'No Lmax is recorded for this species in the Data Manager, so Lmat, Lopt and Lmega are not shown.';
+    method.textContent = `${u.name} (${u.local}). Lengths: ${[hasD ? howD : '', hasP ? howP : ''].filter(Boolean).join('; ')}. ${refTxt} Bars are ${bw} cm wide.`;
     return svg;
   };
 
@@ -986,9 +1008,10 @@ window.FF = (() => {
     const W = Math.max(280, box.clientWidth), H = 340;
     const ok = FF.areaOk(M, f); const allowed = new Set([...M.areas.values()].filter(ok).map((a) => a.id));
     const us = new Set(f.units), fs = new Set(f.fams);
-    const fishBy = d3.rollup(E.size.filter((r) => allowed.has(r.a) && r.year >= f.y0 && r.year <= f.y1), (v) => d3.sum(v, (r) => r.fish), (r) => r.b);
+    const soS = FF.srcOk(f);
+    const fishBy = d3.rollup(E.size.filter((r) => soS(r.s) && allowed.has(r.a) && r.year >= f.y0 && r.year <= f.y1), (v) => d3.sum(v, (r) => r.fish), (r) => r.b);
     const MIN_FISH = 100;
-    const spAll = [...fishBy.keys()].filter((b) => E.params.has(b) && M.units.has(b) && (!us.size || us.has(b)) && (!fs.size || fs.has(M.units.get(b).family)));
+    const spAll = [...fishBy.keys()].filter((b) => M.units.has(b) && (!us.size || us.has(b)) && (!fs.size || fs.has(M.units.get(b).family)));
     const spOpts = spAll.filter((b) => fishBy.get(b) >= MIN_FISH).sort((a, b) => M.units.get(a).name.localeCompare(M.units.get(b).name));
     const spSkipped = spAll.length - spOpts.length;
     let chosen = p.sizeSp && spOpts.includes(String(p.sizeSp)) ? String(p.sizeSp) : null;
@@ -1049,7 +1072,7 @@ window.FF = (() => {
       const ind = document.querySelector('#ind-toggle [aria-pressed="true"]')?.textContent || 'Indicator';
       const f = FF.P(), where = place();
       const title = `${ind} — ${where}`;
-      const subtitle = `${f.y0 === f.y1 ? f.y0 : f.y0 + '–' + f.y1}${f.fams.length ? ' · ' + (f.fams.length === 1 ? f.fams[0] : f.fams.length + ' families') : ''}${f.units.length ? ' · ' + (f.units.length === 1 ? FF.model().units.get(f.units[0])?.name : f.units.length + ' buying units') : ''}${ind === 'Size structure' ? ' · ' + (document.getElementById('ind-sp').selectedOptions[0]?.textContent || '') : ''}${(ind === 'Total landings' || ind === 'CPUE') ? ' · ' + (document.querySelector('#ind-step [aria-pressed="true"]')?.textContent || '') + ' points' : ''}`;
+      const subtitle = `${FF_SOURCES.length > 1 ? ({ digital: 'Digital records', paper: 'Paper-based records', both: 'Digital + paper records' })[f.source] + ' · ' : ''}${f.y0 === f.y1 ? f.y0 : f.y0 + '–' + f.y1}${f.fams.length ? ' · ' + (f.fams.length === 1 ? f.fams[0] : f.fams.length + ' families') : ''}${f.units.length ? ' · ' + (f.units.length === 1 ? FF.model().units.get(f.units[0])?.name : f.units.length + ' buying units') : ''}${ind === 'Size structure' ? ' · ' + (document.getElementById('ind-sp').selectedOptions[0]?.textContent || '') : ''}${(ind === 'Total landings' || ind === 'CPUE') ? ' · ' + (document.querySelector('#ind-step [aria-pressed="true"]')?.textContent || '') + ' points' : ''}`;
       const legend = [...document.querySelectorAll('#ind-legend span')].map((s) => ({ color: getComputedStyle(s.querySelector('i')).backgroundColor, text: s.textContent }));
       const stats = [...document.querySelectorAll('#ind-stats .ff-ind-stat')].map((s) => `${s.querySelector('span').textContent}: ${s.querySelector('b').textContent}`).join('   ·   ');
       const note = document.getElementById('ind-method').textContent + ` Source: Rare Fish Forever catch data (data.rare.org), updated ${window.FF_UPDATED || ''}.`;

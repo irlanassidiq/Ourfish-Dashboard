@@ -1,7 +1,9 @@
 # Fish Forever catch dashboard — Indonesia
 
-A self-hosted version of the dashboard built from Rare's Fish Forever catch data
-(data.rare.org). It is plain HTML: open `index.html` in a browser, or publish the
+A self-hosted version of the dashboard built from Rare's Fish Forever catch data:
+digital records from the Data Manager (data.rare.org) and paper-based records from the
+public Google Sheet "Paper-based Catch Recording - Indonesia". A **Data source** switch
+shows Digital, Paper-based or Both. It is plain HTML: open `index.html` in a browser, or publish the
 folder on any web host.
 
 ```
@@ -52,6 +54,25 @@ current, schedule that command (cron on Linux, Task Scheduler on Windows).
 
 To build from a CSV you already downloaded, set `RARE_CSV=path/to/file.csv` instead
 of `RARE_API_KEY`.
+
+## The paper-based Google Sheet
+
+`build_data.R` downloads the sheet's first tab ("Asli") as CSV on every run; it needs no key
+because the sheet is viewable by anyone with the link. If the sheet stops being public, or
+you want another tab or sheet, set the variables `PAPER_SHEET_ID` and `PAPER_SHEET_GID`
+(the number after `gid=` in the sheet's address).
+
+How the sheet is read:
+- Province names are mapped to the Data Manager's: Sulawesi Tenggara → South East Sulawesi,
+  Jakarta → DKI Jakarta, Papua Barat → South West Papua. `fisher_install` is the district
+  (Wabula → Buton); `managed_access` is the managed access area.
+- `fish_species` is the buying unit, `fish_name` the local name, `fish_family` the family,
+  `gear (INA)` the gear, `weight (Kg)` the catch and `total_price (Rp)` the value.
+- CPUE uses `trip_id`: each trip in the sheet counts once.
+- Size structure uses the measured `length (cm)` column, each record counted `count`
+  times. Lmat, Lopt and Lmega come from the species' Lmax in the Data Manager; species
+  without one are shown without those lines.
+- Rows without a valid day, month and year are skipped.
 
 ## Sharing a filtered view
 
