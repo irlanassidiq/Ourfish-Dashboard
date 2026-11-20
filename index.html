@@ -64,12 +64,22 @@ html, body { margin: 0; background: var(--color-bg); color: var(--color-fg); fon
   window.FF_BASE = Number(src.base_year) || 2019;
   const SRC = (src.sources && src.sources.length) ? src.sources : ['digital'];
   window.FF_SOURCES = SRC;
-  const years = (tables.catch_cube?.data || []).map((r) => FF_BASE + Math.floor(Number(r.m) / 12));
-  const defaults = { provinces: [], districts: [], areas: [], families: [], units: [], y0: years.length ? Math.min(...years) : FF_BASE, y1: years.length ? Math.max(...years) : FF_BASE, source: SRC.includes('digital') ? 'digital' : SRC[0], metric: 'kg', ind: 'landings', step: 'day', sizeSp: null, view: 'catch', rds: 'fish', rmet: 'bio', rcat: 'total', rval: '', rx: ['area'], rmar: 'split', rsurvey: [], rprov: [], rarea: [], ryear: [] };
-  // Filters can come from the address (#y0=2024&ind=cpue …) so a view can be shared as a link
+  const DAY = 86400000, T0 = Date.UTC(FF_BASE, 0, 1);
+  const iso = (d) => new Date(T0 + d * DAY).toISOString().slice(0, 10);
+  // First and last day with data (monthly rows span their whole month)
+  let dMin = Infinity, dMax = -Infinity;
+  for (const r of (tables.catch_cube?.data || [])) {
+    let s, e;
+    if (r.d !== undefined) s = e = Number(r.d);
+    else { const y = FF_BASE + Math.floor(Number(r.m) / 12), mo = Number(r.m) % 12; s = Math.round((Date.UTC(y, mo, 1) - T0) / DAY); e = Math.round((Date.UTC(y, mo + 1, 0) - T0) / DAY); }
+    if (s < dMin) dMin = s; if (e > dMax) dMax = e;
+  }
+  if (!isFinite(dMin)) { dMin = 0; dMax = 0; }
+  const defaults = { provinces: [], districts: [], areas: [], families: [], units: [], date0: iso(dMin), date1: iso(dMax), source: SRC.includes('digital') ? 'digital' : SRC[0], metric: 'kg', ind: 'landings', step: 'day', sizeSp: null, view: 'catch', rds: 'fish', rmet: 'bio', rcat: 'total', rval: '', rx: ['area'], rmar: 'split', rsurvey: [], rprov: [], rarea: [], ryear: [] };
+  // Filters can come from the address (#date0=2024-01-01&ind=cpue …) so a view can be shared as a link
   const fromHash = () => { try { const h = new URLSearchParams(location.hash.slice(1)); const o = {}; for (const [k, v] of h) { if (!(k in defaults)) continue; o[k] = Array.isArray(defaults[k]) ? (v ? v.split('~') : []) : (typeof defaults[k] === 'number' ? Number(v) : v || null); } return o; } catch (e) { return {}; } };
   let params = { ...defaults, ...fromHash() };
-  const toHash = () => { const h = new URLSearchParams(); for (const [k, v] of Object.entries(params)) { const dv = defaults[k]; const same = Array.isArray(v) ? v.length === 0 : v === dv; if (!same && v !== null) h.set(k, Array.isArray(v) ? v.join('~') : String(v)); } const s = h.toString(); history.replaceState(null, '', s ? '#' + s : location.pathname + location.search); };
+  const toHash = () => { const h = new URLSearchParams(); for (const [k, v] of Object.entries(params)) { const dv = defaults[k]; const same = JSON.stringify(v) === JSON.stringify(dv); if (!same && v !== null) h.set(k, Array.isArray(v) ? v.join('~') : String(v)); } const s = h.toString(); history.replaceState(null, '', s ? '#' + s : location.pathname + location.search); };
   const subs = []; let queued = false;
   const run = () => { queued = false; for (const fn of subs) { try { fn(); } catch (e) { console.error(e); } } };
   const later = () => { if (!queued) { queued = true; Promise.resolve().then(run); } };
@@ -186,6 +196,7 @@ html, body { margin: 0; background: var(--color-bg); color: var(--color-fg); fon
 .ff-btn.ff-primary { background: #1565c0; color: #fff; border-color: #1565c0; }
 .ff-view-toggle { margin-top: var(--cds-gap-sm); }
 .ff-view-toggle .ff-btn { font-size: var(--cds-font-size-body); }
+.ff-controls input.ff-date { font: inherit; font-size: var(--cds-font-size-body); color: var(--color-fg); background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: calc(var(--cds-pad-xs) - 1px) var(--cds-pad-sm); color-scheme: light dark; }
 </style>
 
 <div class="ff">
@@ -204,8 +215,8 @@ html, body { margin: 0; background: var(--color-bg); color: var(--color-fg); fon
     <div class="ff-field" id="ms-area" data-source="areas">Managed access areas</div>
     <div class="ff-field" id="ms-fam" data-source="buying_units">Families</div>
     <div class="ff-field" id="ms-unit" data-source="buying_units">Buying units</div>
-    <label class="ff-field">From<select class="ff-y0" data-source="catch_cube" aria-label="From year"></select></label>
-    <label class="ff-field">To<select class="ff-y1" data-source="catch_cube" aria-label="To year"></select></label>
+    <label class="ff-field">From<input type="date" class="ff-date ff-y0" data-source="catch_cube" aria-label="From date"></label>
+    <label class="ff-field">To<input type="date" class="ff-date ff-y1" data-source="catch_cube" aria-label="To date"></label>
     <button class="ff-btn ff-reset" type="button">Reset</button>
   </div>
 
@@ -421,6 +432,9 @@ window.FF = (() => {
     pct: d3.format('.0%'),
   };
   const csvNum = (x) => Number(x);
+  const DAY = 86400000, T0 = Date.UTC(FF_BASE, 0, 1);
+  const dayOf = (s) => { const [y, mo, d] = String(s || '').split('-').map(Number); return y ? Math.round((Date.UTC(y, mo - 1, d || 1) - T0) / DAY) : null; };
+  const fmtDay = (d) => d3.utcFormat('%-d %b %Y')(new Date(T0 + d * DAY));
   // Parsed lookups, cached by the data arrays they came from
   let cache = { src: null };
   const model = () => {
@@ -431,17 +445,18 @@ window.FF = (() => {
       const sentence = (s) => { const x = String(s || '').trim().toLowerCase(); return x.charAt(0).toUpperCase() + x.slice(1); };
       const units = new Map(b.data.map((r) => [String(r.b), { id: String(r.b), name: sentence(r.buying_unit), species: r.species, family: r.family || 'Unknown', local: r.local_name }]));
       const gears = new Map(g.data.map((r) => [String(r.g), r.gear]));
-      const rows = c.data.map((r) => { const m = csvNum(r.m); return { m, year: FF_BASE + Math.floor(m / 12), s: String(r.s ?? '0'), a: String(r.a), b: String(r.b), g: String(r.g), kg: csvNum(r.kg), idr: csvNum(r.idr), n: csvNum(r.n) }; });
+      const rows = c.data.map((r) => { let m, ds, de; if (r.d !== undefined && r.d !== '') { ds = de = csvNum(r.d); const dt = new Date(T0 + ds * DAY); m = (dt.getUTCFullYear() - FF_BASE) * 12 + dt.getUTCMonth(); } else { m = csvNum(r.m); const y = FF_BASE + Math.floor(m / 12), mo = m % 12; ds = Math.round((Date.UTC(y, mo, 1) - T0) / DAY); de = Math.round((Date.UTC(y, mo + 1, 0) - T0) / DAY); } return { m, ds, de, year: FF_BASE + Math.floor(m / 12), s: String(r.s ?? '0'), a: String(r.a), b: String(r.b), g: String(r.g), kg: csvNum(r.kg), idr: csvNum(r.idr), n: csvNum(r.n) }; });
       cache = { src: c.data, a: a.data, b: b.data, g: g.data, areas, units, gears, rows, maxMonth: d3.max(rows, (r) => r.m) ?? 0, years: [...new Set(rows.map((r) => r.year))].sort((x, y) => x - y), key: null, sel: null };
     }
     return cache;
   };
   const P = () => {
     const p = dash.params();
-    let y0 = Number(p.y0 ?? FF_BASE), y1 = Number(p.y1 ?? FF_BASE);
-    if (y0 > y1) [y0, y1] = [y1, y0];
+    let d0 = dayOf(p.date0) ?? 0, d1 = dayOf(p.date1) ?? 1e7;
+    if (d0 > d1) [d0, d1] = [d1, d0];
+    const y0 = new Date(T0 + d0 * DAY).getUTCFullYear(), y1 = new Date(T0 + Math.min(d1, 2e6) * DAY).getUTCFullYear();
     const list = (v) => Array.isArray(v) ? v.map(String) : [];
-    return { provs: list(p.provinces), dists: list(p.districts), areas: list(p.areas), fams: list(p.families), units: list(p.units), y0, y1, source: ['digital', 'paper', 'both'].includes(p.source) ? p.source : 'digital', metric: p.metric || 'kg' };
+    return { provs: list(p.provinces), dists: list(p.districts), areas: list(p.areas), fams: list(p.families), units: list(p.units), d0, d1, y0, y1, source: ['digital', 'paper', 'both'].includes(p.source) ? p.source : 'digital', metric: p.metric || 'kg' };
   };
   // Which records the data-source switch keeps (s: 0 digital, 1 paper)
   const srcOk = (f) => f.source === 'both' ? () => true : f.source === 'paper' ? (s) => s === '1' : (s) => s === '0';
@@ -457,12 +472,12 @@ window.FF = (() => {
     const ok = areaOk(M, f); const us = new Set(f.units), fs = new Set(f.fams);
     const allowed = new Set([...M.areas.values()].filter(ok).map((x) => x.id));
     const so = srcOk(f);
-    const rows = M.rows.filter((r) => so(r.s) && r.year >= f.y0 && r.year <= f.y1 && allowed.has(r.a) && (!us.size || us.has(r.b)) && (!fs.size || fs.has(M.units.get(r.b)?.family || 'Unknown')));
+    const rows = M.rows.filter((r) => so(r.s) && r.de >= f.d0 && r.ds <= f.d1 && allowed.has(r.a) && (!us.size || us.has(r.b)) && (!fs.size || fs.has(M.units.get(r.b)?.family || 'Unknown')));
     M.key = key; M.sel = { f, rows, kg: d3.sum(rows, (r) => r.kg), idr: d3.sum(rows, (r) => r.idr), n: d3.sum(rows, (r) => r.n) };
     return M.sel;
   };
   const label = (f) => {
-    const yrs = f.y0 === f.y1 ? String(f.y0) : f.y0 + '–' + f.y1;
+    const yrs = FF.dLabel(f);
     const loc = f.areas.length ? `${f.areas.length} area${f.areas.length > 1 ? 's' : ''}` : f.dists.length ? `${f.dists.length} district${f.dists.length > 1 ? 's' : ''}` : f.provs.length ? (f.provs.length === 1 ? f.provs[0] : `${f.provs.length} provinces`) : 'All provinces';
     return `${yrs} · ${loc}${f.fams.length ? ` · ${f.fams.length === 1 ? f.fams[0] : f.fams.length + ' families'}` : ''}${f.units.length ? ` · ${f.units.length} buying unit${f.units.length > 1 ? 's' : ''}` : ''}`;
   };
@@ -497,7 +512,8 @@ window.FF = (() => {
     th.setAttribute('aria-sort', k === state.key ? (state.dir > 0 ? 'ascending' : 'descending') : 'none');
   });
   const cmp = (state) => (a, b) => { const x = a[state.key], y = b[state.key]; return (typeof x === 'number' && typeof y === 'number' ? x - y : String(x).localeCompare(String(y))) * state.dir; };
-  return { famName, gearName, fmt, model, P, srcOk, areaOk, selected, label, statusOf, fail, empty, tip, sortTable, setSort, cmp };
+  const dLabel = (f) => f.d0 === f.d1 ? fmtDay(f.d0) : `${fmtDay(f.d0)} – ${fmtDay(f.d1)}`;
+  return { famName, gearName, fmt, model, P, dLabel, dayOf, fmtDay, srcOk, areaOk, selected, label, statusOf, fail, empty, tip, sortTable, setSort, cmp };
 })();
 </script>
 
@@ -562,8 +578,8 @@ window.FF = (() => {
   const y0 = document.querySelector('.ff-y0'), y1 = document.querySelector('.ff-y1');
   const srcSel = document.querySelector('.ff-src'), srcWrap = document.getElementById('src-wrap');
   srcSel.addEventListener('change', () => dash.setParams({ source: srcSel.value }));
-  y0.addEventListener('change', () => dash.setParams({ y0: Number(y0.value) }));
-  y1.addEventListener('change', () => dash.setParams({ y1: Number(y1.value) }));
+  y0.addEventListener('change', () => { if (y0.value) dash.setParams({ date0: y0.value }); });
+  y1.addEventListener('change', () => { if (y1.value) dash.setParams({ date1: y1.value }); });
   document.querySelector('.ff-reset').addEventListener('click', () => dash.resetParams());
   document.querySelectorAll('#metric-toggle .ff-btn').forEach((b) => b.addEventListener('click', () => dash.setParams({ metric: b.dataset.m })));
 
@@ -588,7 +604,7 @@ window.FF = (() => {
     const aOpts = areaScope.map((a) => ({ value: a.id, label: a.name, group: a.district + ', ' + a.province })).sort((a, b) => a.group.localeCompare(b.group) || (a.label.startsWith('Outside') - b.label.startsWith('Outside')) || a.label.localeCompare(b.label));
     msArea.update(aOpts, f.areas);
     // Families and buying units with catch in the chosen places and years, A to Z
-    const unitKg = d3.rollup(M.rows.filter((r) => so(r.s) && akeys.has(r.a) && (!f.areas.length || f.areas.includes(r.a)) && r.year >= f.y0 && r.year <= f.y1), (v) => d3.sum(v, (r) => r.kg), (r) => r.b);
+    const unitKg = d3.rollup(M.rows.filter((r) => so(r.s) && akeys.has(r.a) && (!f.areas.length || f.areas.includes(r.a)) && r.de >= f.d0 && r.ds <= f.d1), (v) => d3.sum(v, (r) => r.kg), (r) => r.b);
     const famKg = d3.rollup([...unitKg], (v) => d3.sum(v, ([, kg]) => kg), ([b]) => M.units.get(b)?.family || 'Unknown');
     const fOpts = [...new Set([...famKg.keys(), ...f.fams])].sort((a, b) => a.localeCompare(b))
       .map((fm) => ({ value: fm, label: fm, sub: `${FF.famName[fm] ? FF.famName[fm] + ' · ' : ''}${FF.fmt.tTip(famKg.get(fm) || 0)}` }));
@@ -599,9 +615,10 @@ window.FF = (() => {
       .sort((a, b) => a.name.localeCompare(b.name))
       .map((u) => ({ value: u.id, label: u.name, sub: `${u.local} · ${u.family} · ${FF.fmt.tTip(unitKg.get(u.id) || 0)}` }));
     msUnit.update(uOpts, f.units);
-    y0.replaceChildren(...M.years.map((y) => new Option(y, y)));
-    y1.replaceChildren(...M.years.map((y) => new Option(y, y)));
-    y0.value = String(f.y0); y1.value = String(f.y1);
+    const iso = (d) => new Date(Date.UTC(FF_BASE, 0, 1) + d * 86400000).toISOString().slice(0, 10);
+    const lo = d3.min(M.rows, (r) => r.ds), hi = d3.max(M.rows, (r) => r.de);
+    for (const el of [y0, y1]) { el.min = iso(lo); el.max = iso(hi); }
+    y0.value = iso(Math.max(f.d0, lo)); y1.value = iso(Math.min(f.d1, hi));
   });
 })();
 </script>
@@ -622,7 +639,7 @@ window.FF = (() => {
       kpis.forEach((c, i) => { const v = c.querySelector('.ff-kpi-value'); v.classList.remove('dash-skeleton'); v.textContent = vals[i]; c.querySelector('.ff-kpi-note').textContent = notes[i]; });
       const M = FF.model(), take = document.getElementById('takeaway');
       take.classList.remove('dash-skeleton');
-      const when = f.y0 === f.y1 ? 'In ' + f.y0 : 'From ' + f.y0 + ' to ' + f.y1;
+      const when = f.d0 === f.d1 ? 'On ' + FF.fmtDay(f.d0) : 'From ' + FF.fmtDay(f.d0) + ' to ' + FF.fmtDay(f.d1);
       if (!S.rows.length) take.textContent = `${when}, no catch records match these filters.`;
       else {
         let s = `${when}, the selection recorded ${fmt.tUnit(S.kg)} of catch worth ${fmt.idr(S.idr)}.`;
@@ -661,7 +678,8 @@ window.FF = (() => {
     const S = FF.selected(), f = S.f, mk = ['kg', 'idr', 'n'].includes(f.metric) ? f.metric : 'kg';
     if (!S.rows.length) return FF.empty(box);
     const all = [];
-    for (let m = (f.y0 - FF_BASE) * 12; m <= Math.min((f.y1 - FF_BASE) * 12 + 11, FF.model().maxMonth); m++) all.push(m);
+    const mOf = (d) => { const dt = new Date(Date.UTC(FF_BASE, 0, 1) + d * 86400000); return (dt.getUTCFullYear() - FF_BASE) * 12 + dt.getUTCMonth(); };
+    for (let m = Math.max(mOf(f.d0), d3.min(FF.model().rows, (r) => r.m)); m <= Math.min(mOf(Math.min(f.d1, 2e6)), FF.model().maxMonth); m++) all.push(m);
     const byM = d3.rollup(S.rows, (v) => d3.sum(v, (r) => r[mk]), (r) => r.m);
     const series = all.map((m) => ({ m, v: byM.get(m) || 0 }));
     const mDate = (m) => new Date(Date.UTC(FF_BASE + Math.floor(m / 12), m % 12, 1));
@@ -755,7 +773,7 @@ window.FF = (() => {
     const fset = new Set(fams);
     const pts = d3.rollups(S.rows.filter((r) => fset.has(famOf(r))), (v) => { const kg = d3.sum(v, (r) => r.kg); return kg > 0 ? d3.sum(v, (r) => r.idr) / kg : null; }, famOf, (r) => r.year)
       .flatMap(([fam, ys]) => ys.filter(([, p]) => p !== null).map(([year, p]) => ({ fam, year, p })));
-    const years = d3.range(f.y0, f.y1 + 1);
+    const years = d3.range(Math.max(f.y0, d3.min(S.rows, (r) => r.year)), Math.min(f.y1, d3.max(S.rows, (r) => r.year)) + 1);
     const color = (fm) => dash.colors[fams.indexOf(fm) % dash.colors.length];
     leg.replaceChildren(...fams.map((fm) => { const s = document.createElement('span'); const i = document.createElement('i'); i.className = 'ff-sw'; i.style.background = color(fm); s.append(i, document.createTextNode(fm + (FF.famName[fm] ? ' · ' + FF.famName[fm] : ''))); return s; }));
     const W = Math.max(280, box.clientWidth), H = 280;
@@ -855,7 +873,7 @@ window.FF = (() => {
       const yr = (d) => new Date(T0 + d * DAY).getUTCFullYear();
       ext = {
         s: sz.data, p: pr.data, c: dc.data, t: dt.data,
-        size: sz.data.map((r) => ({ b: String(r.b), a: String(r.a), s: String(r.s ?? '0'), year: Number(r.year), len: Number(r.len_cm), fish: Number(r.fish) })),
+        size: sz.data.map((r) => { let ds, de, year; if (r.d !== undefined && r.d !== '') { ds = de = Number(r.d); year = yr(ds); } else { year = Number(r.year); ds = Math.round((Date.UTC(year, 0, 1) - T0) / DAY); de = Math.round((Date.UTC(year, 11, 31) - T0) / DAY); } return { b: String(r.b), a: String(r.a), s: String(r.s ?? '0'), year, ds, de, len: Number(r.len_cm), fish: Number(r.fish) }; }),
         params: new Map(pr.data.filter((r) => r.lmax_cm !== '' && Number(r.lmax_cm) > 0).map((r) => [String(r.b), { lmax: Number(r.lmax_cm), linf: Number(r.linf_cm), lmat: Number(r.lmat_cm), lopt: Number(r.lopt_cm), lmega: Number(r.lmega_cm), a: Number(r.lw_a), bb: Number(r.lw_b) }])),
         dcatch: dc.data.map((r) => { const d = Number(r.d); return { d, year: yr(d), s: String(r.s ?? '0'), a: String(r.a), b: String(r.b), kg: Number(r.kg) }; }),
         dtrips: dt.data.map((r) => { const d = Number(r.d); return { d, year: yr(d), s: String(r.s ?? '0'), a: String(r.a), trips: Number(r.trips) }; }),
@@ -920,8 +938,8 @@ window.FF = (() => {
     const ok = FF.areaOk(M, f); const allowed = new Set([...M.areas.values()].filter(ok).map((a) => a.id));
     const us = new Set(f.units), fs = new Set(f.fams);
     const so = FF.srcOk(f);
-    const kg = d3.rollup(E.dcatch.filter((r) => so(r.s) && r.year >= f.y0 && r.year <= f.y1 && allowed.has(r.a) && (!us.size || us.has(r.b)) && (!fs.size || fs.has(M.units.get(r.b)?.family || 'Unknown'))), (v) => d3.sum(v, (r) => r.kg), (r) => r.d);
-    const tr = d3.rollup(E.dtrips.filter((r) => so(r.s) && r.year >= f.y0 && r.year <= f.y1 && allowed.has(r.a)), (v) => d3.sum(v, (r) => r.trips), (r) => r.d);
+    const kg = d3.rollup(E.dcatch.filter((r) => so(r.s) && r.d >= f.d0 && r.d <= f.d1 && allowed.has(r.a) && (!us.size || us.has(r.b)) && (!fs.size || fs.has(M.units.get(r.b)?.family || 'Unknown'))), (v) => d3.sum(v, (r) => r.kg), (r) => r.d);
+    const tr = d3.rollup(E.dtrips.filter((r) => so(r.s) && r.d >= f.d0 && r.d <= f.d1 && allowed.has(r.a)), (v) => d3.sum(v, (r) => r.trips), (r) => r.d);
     // Group days into the chosen period; each period sits at its middle (15th of the month, July 1)
     const key = (d) => { if (step === 'day') return d; const dt = new Date(T0 + d * DAY), y = dt.getUTCFullYear(); return step === 'year' ? Math.round((Date.UTC(y, 6, 1) - T0) / DAY) : Math.round((Date.UTC(y, dt.getUTCMonth(), 15) - T0) / DAY); };
     const kgP = d3.rollup([...kg], (v) => d3.sum(v, ([, x]) => x), ([d]) => key(d));
@@ -1023,7 +1041,7 @@ window.FF = (() => {
     const prm = E.params.get(b), u = M.units.get(b);
     const ok = FF.areaOk(M, f); const allowed = new Set([...M.areas.values()].filter(ok).map((a) => a.id));
     const so = FF.srcOk(f);
-    const rows = E.size.filter((r) => r.b === b && so(r.s) && allowed.has(r.a) && r.year >= f.y0 && r.year <= f.y1);
+    const rows = E.size.filter((r) => r.b === b && so(r.s) && allowed.has(r.a) && r.de >= f.d0 && r.ds <= f.d1);
     const n = d3.sum(rows, (r) => r.fish);
     if (!n) { stats.replaceChildren(); leg.replaceChildren(); method.textContent = 'No lengths for this species in the selection.'; return null; }
     const hasD = rows.some((r) => r.s === '0'), hasP = rows.some((r) => r.s === '1');
@@ -1098,7 +1116,7 @@ window.FF = (() => {
     const ok = FF.areaOk(M, f); const allowed = new Set([...M.areas.values()].filter(ok).map((a) => a.id));
     const us = new Set(f.units), fs = new Set(f.fams);
     const soS = FF.srcOk(f);
-    const fishBy = d3.rollup(E.size.filter((r) => soS(r.s) && allowed.has(r.a) && r.year >= f.y0 && r.year <= f.y1), (v) => d3.sum(v, (r) => r.fish), (r) => r.b);
+    const fishBy = d3.rollup(E.size.filter((r) => soS(r.s) && allowed.has(r.a) && r.de >= f.d0 && r.ds <= f.d1), (v) => d3.sum(v, (r) => r.fish), (r) => r.b);
     const MIN_FISH = 100;
     const spAll = [...fishBy.keys()].filter((b) => M.units.has(b) && (!us.size || us.has(b)) && (!fs.size || fs.has(M.units.get(b).family)));
     const spOpts = spAll.filter((b) => fishBy.get(b) >= MIN_FISH).sort((a, b) => M.units.get(a).name.localeCompare(M.units.get(b).name));
@@ -1161,7 +1179,7 @@ window.FF = (() => {
       const ind = document.querySelector('#ind-toggle [aria-pressed="true"]')?.textContent || 'Indicator';
       const f = FF.P(), where = place();
       const title = `${ind} — ${where}`;
-      const subtitle = `${FF_SOURCES.length > 1 ? ({ digital: 'Digital records', paper: 'Paper-based records', both: 'Digital + paper records' })[f.source] + ' · ' : ''}${f.y0 === f.y1 ? f.y0 : f.y0 + '–' + f.y1}${f.fams.length ? ' · ' + (f.fams.length === 1 ? f.fams[0] : f.fams.length + ' families') : ''}${f.units.length ? ' · ' + (f.units.length === 1 ? FF.model().units.get(f.units[0])?.name : f.units.length + ' buying units') : ''}${ind === 'Size structure' ? ' · ' + (document.getElementById('ind-sp').selectedOptions[0]?.textContent || '') : ''}${(ind === 'Total landings' || ind === 'CPUE') ? ' · ' + (document.querySelector('#ind-step [aria-pressed="true"]')?.textContent || '') + ' points' : ''}`;
+      const subtitle = `${FF_SOURCES.length > 1 ? ({ digital: 'Digital records', paper: 'Paper-based records', both: 'Digital + paper records' })[f.source] + ' · ' : ''}${FF.dLabel(f)}${f.fams.length ? ' · ' + (f.fams.length === 1 ? f.fams[0] : f.fams.length + ' families') : ''}${f.units.length ? ' · ' + (f.units.length === 1 ? FF.model().units.get(f.units[0])?.name : f.units.length + ' buying units') : ''}${ind === 'Size structure' ? ' · ' + (document.getElementById('ind-sp').selectedOptions[0]?.textContent || '') : ''}${(ind === 'Total landings' || ind === 'CPUE') ? ' · ' + (document.querySelector('#ind-step [aria-pressed="true"]')?.textContent || '') + ' points' : ''}`;
       const legend = [...document.querySelectorAll('#ind-legend span')].map((s) => ({ color: getComputedStyle(s.querySelector('i')).backgroundColor, text: s.textContent }));
       const stats = [...document.querySelectorAll('#ind-stats .ff-ind-stat')].map((s) => { const b = s.querySelector('b'); return { label: s.querySelector('span').textContent, value: b.textContent, color: getComputedStyle(b).color }; });
       const statEl = document.querySelector('#ind-stats .ff-ind-stat');
@@ -1199,7 +1217,7 @@ window.FF = (() => {
       ctx.drawImage(img, (Wc - W) / 2, y, W, H); y += H + 14;
       ctx.fillStyle = muted; ctx.font = `12px ${font}`; noteLines.forEach((l) => { ctx.fillText(l, pad, y); y += 16; });
       const blob = await new Promise((res) => c.toBlob(res, 'image/png'));
-      const filename = `${slug(ind)}_${slug(where)}_${f.y0 === f.y1 ? f.y0 : f.y0 + '-' + f.y1}.png`;
+      const filename = `${slug(ind)}_${slug(where)}_${FF.P && (() => { const i = (d) => new Date(Date.UTC(FF_BASE, 0, 1) + d * 86400000).toISOString().slice(0, 10); return f.d0 === f.d1 ? i(f.d0) : i(f.d0) + '_to_' + i(Math.min(f.d1, 2e6)); })()}.png`;
       await downloads.save({ filename, data: blob });
       busy(false);
     } catch (e) {

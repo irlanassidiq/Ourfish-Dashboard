@@ -120,7 +120,8 @@ d[, `:=`(ai = match(area_key, areas_v) - 1L, bi = match(unit, units_v) - 1L, gi 
 top1 <- function(x) { x <- x[!blank(x)]; if (!length(x)) return(""); t <- table(factor(x, levels = unique(x))); names(t)[which.max(t)] }
 
 # ---- 3. Tables (s = 0 digital, 1 paper) --------------------------------------
-cube <- d[, .(kg = round(sum(kg), 1), idr = round(sum(idr)), n = .N), by = .(m, a = ai, b = bi, g = gi, s)]
+# Daily, so the dashboard can filter on any from-to date
+cube <- d[, .(kg = round(sum(kg), 1), idr = round(sum(idr)), n = .N), by = .(d = day, a = ai, b = bi, g = gi, s)]
 
 bu <- d[, .(species = top1(species), family = top1(family), local_name = top1(local)), by = .(b = bi, buying_unit = unit)]
 bu[family == "", family := "Unknown"]
@@ -170,8 +171,8 @@ pr <- pr[order(b), .(b, lw_a, lw_b, lmax_cm, linf_cm, lmat_cm, lopt_cm, lmega_cm
 sd <- d[s == 0L & by_weight & fish > 0 & kg > 0 & lw_a > 0 & lw_b > 0 & lmax > 0]
 sd[, L := (kg * 1000 / fish / lw_a)^(1 / lw_b)]
 sd <- sd[is.finite(L) & L > 0 & L <= lmax * 1.5]
-sp <- d[s == 1L & fish > 0 & length_cm > 0, .(bi, ai, year, s, fish, L = length_cm)]
-size_bins <- rbindlist(list(sd[, .(bi, ai, year, s, fish, L)], sp))[, .(fish = sum(fish)), by = .(b = bi, a = ai, year, s, len_cm = floor(L))]
+sp <- d[s == 1L & fish > 0 & length_cm > 0, .(bi, ai, day, s, fish, L = length_cm)]
+size_bins <- rbindlist(list(sd[, .(bi, ai, day, s, fish, L)], sp))[, .(fish = sum(fish)), by = .(b = bi, a = ai, d = day, s, len_cm = floor(L))]
 message("Length classes from ", nrow(sd), " digital and ", nrow(sp), " paper records.")
 
 # ---- 4. Write data.js --------------------------------------------------------
